@@ -1,0 +1,58 @@
+:root {
+  --bg: #0b0e14;
+  --panel: #141922;
+  --panel-2: #1b2230;
+  --border: #263042;
+  --text: #e6edf3;
+  --muted: #8b97a7;
+  --green: #2ea043;
+  --green-bg: rgba(46, 160, 67, 0.14);
+  --red: #f85149;
+  --red-bg: rgba(248, 81, 73, 0.14);
+  --amber: #d29922;
+  --amber-bg: rgba(210, 153, 34, 0.16);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+}
+
+a { color: inherit; }
+
+.wrap { max-width: 1600px; margin: 0 auto; padding: 24px; }
+
+header.top { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+header.top h1 { font-size: 20px; margin: 0; }
+.sub { color: var(--muted); margin: 0 0 20px; }
+
+.cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+.card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px 18px; min-width: 150px;
+}
+.card .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.card .v { font-size: 22px; font-weight: 600; margin-top: 4px; }
+
+.table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+table { border-collapse: collapse; width: 100%; white-space: nowrap; }
+th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--border); }
+th { background: var(--panel-2); color: var(--muted); font-weight: 600; position: sticky; top: 0; }
+td.model, th.model { text-align: left; position: sticky; left: 0; background: var(--panel); z-index: 1; }
+th.model { z-index: 2; }
+tr:hover td { background: var(--panel-2); }
+tr:hover td.model { background: var(--panel-2); }
+
+.our { font-weight: 600; }
+.cheaper { color: var(--green); background: var(--green-bg); }   /* competitor cheaper than us */
+.pricier { color: var(--red); background: var(--red-bg); }       /* competitor pricier than us */
+.map-flag { color: var(--amber); background: var(--amber-bg); }  /* below Bosch threshold */
+.muted { color: var(--muted); }
+.pill { font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); }
+.legend { display: flex; gap: 16px; color: var(--muted); font-size: 12px; margin: 10px 2px 0; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: middle; }
