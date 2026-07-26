@@ -51,6 +51,21 @@ export async function findByModelCode(
     return null;
   }
 
+  return findCandidateInHtml(html, modelCode, competitor);
+}
+
+/**
+ * Pure matcher: given already-fetched search-page HTML (from a plain fetch OR a
+ * Playwright render), find the best product URL for the model code. Shared by
+ * the API route and the Playwright scraper.
+ */
+export function findCandidateInHtml(
+  html: string,
+  modelCode: string,
+  competitor: Competitor,
+): MatchCandidate | null {
+  const code = normalise(modelCode);
+
   // 1. JSON-LD products — but never accept a URL that is itself a search page
   // (some sites emit a placeholder Product/Offer whose url is the search URL).
   const products = extractProductsFromHtml(html).filter(
