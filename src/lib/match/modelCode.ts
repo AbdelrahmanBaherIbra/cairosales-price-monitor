@@ -51,8 +51,11 @@ export async function findByModelCode(
     return null;
   }
 
-  // 1. JSON-LD products
-  const products = extractProductsFromHtml(html);
+  // 1. JSON-LD products — but never accept a URL that is itself a search page
+  // (some sites emit a placeholder Product/Offer whose url is the search URL).
+  const products = extractProductsFromHtml(html).filter(
+    (p) => p.url && !isSearchUrl(p.url),
+  );
   for (const p of products) {
     const skuHit = p.sku && normalise(p.sku).includes(code);
     const mpnHit = p.mpn && normalise(p.mpn).includes(code);
@@ -63,19 +66,25 @@ export async function findByModelCode(
     const urlHit = p.url && normalise(p.url).includes(code);
     if ((nameHit || urlHit) && p.url) return { url: absolute(p.url, competitor), confidence: 0.85 };
   }
-  // If exactly one product is listed and the code is on the page, take it.
   if (products.length === 1 && products[0].url && normalise(html).includes(code)) {
     return { url: absolute(products[0].url, competitor), confidence: 0.7 };
   }
 
-  // 2. Anchor-href fallback
-  const links = extractProductLinks(html, competitor.website_url ?? "");
+  // 2. Anchor-href fallback (product pages only, not search pages)
+  const links = extractProductLinks(html, competitor.website_url ?? "").filter(
+    (l) => !isSearchUrl(l),
+  );
   const inUrl = links.find((l) => normalise(l).includes(code));
   if (inUrl) return { url: inUrl, confidence: 0.8 };
   if (normalise(html).includes(code) && links.length === 1) {
     return { url: links[0], confidence: 0.5 };
   }
   return null;
+}
+
+/** True for search / listing URLs, which are never valid product matches. */
+function isSearchUrl(url: string): boolean {
+  return /catalogsearch|[?&]q=|[?&]keyword=|[?&]search=|\/search(\/|\?|$)/i.test(url);
 }
 
 function normalise(s: string): string {

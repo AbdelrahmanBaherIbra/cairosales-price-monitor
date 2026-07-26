@@ -131,5 +131,7 @@ function parseOffers(offers: unknown): ParsedOffer | null {
 function toNumber(v: unknown): number | null {
   if (v == null) return null;
   const n = typeof v === "number" ? v : parseFloat(String(v).replace(/[^0-9.]/g, ""));
-  return Number.isFinite(n) ? n : null;
+  // A price of 0 (or negative) is a placeholder / out-of-stock marker, never a
+  // real price — treat it as "no price".
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
