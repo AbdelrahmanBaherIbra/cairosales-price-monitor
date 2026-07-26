@@ -7,6 +7,63 @@ export interface ParsedOffer {
   raw: unknown;
 }
 
+export interface JsonLdProduct {
+  url: string | null;
+  sku: string | null;
+  mpn: string | null;
+  name: string | null;
+  price: number | null;
+}
+
+/** All Product nodes found in a page's JSON-LD (incl. ItemList members). */
+export function extractProductsFromHtml(html: string): JsonLdProduct[] {
+  const out: JsonLdProduct[] = [];
+  const blocks = [...html.matchAll(
+    /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi,
+  )];
+  for (const [, body] of blocks) {
+    let json: unknown;
+    try {
+      json = JSON.parse(body.trim());
+    } catch {
+      continue;
+    }
+    collectProducts(json, out);
+  }
+  return out;
+}
+
+function collectProducts(node: unknown, out: JsonLdProduct[]): void {
+  if (Array.isArray(node)) {
+    for (const item of node) collectProducts(item, out);
+    return;
+  }
+  if (!node || typeof node !== "object") return;
+  const obj = node as Record<string, unknown>;
+  if ("@graph" in obj) collectProducts(obj["@graph"], out);
+
+  // ItemList -> itemListElement -> ListItem.item (or direct Product)
+  if ("itemListElement" in obj) collectProducts(obj["itemListElement"], out);
+  if ("item" in obj) collectProducts(obj["item"], out);
+
+  const type = obj["@type"];
+  const isProduct = type === "Product" || (Array.isArray(type) && type.includes("Product"));
+  if (isProduct) {
+    const offer = obj.offers ? parseOffers(obj.offers) : null;
+    out.push({
+      url: str(obj.url) ?? str(obj["@id"]),
+      sku: str(obj.sku),
+      mpn: str(obj.mpn),
+      name: str(obj.name),
+      price: offer?.price ?? null,
+    });
+  }
+}
+
+function str(v: unknown): string | null {
+  return typeof v === "string" ? v : null;
+}
+
 export function extractOfferFromHtml(html: string): ParsedOffer | null {
   const blocks = [...html.matchAll(
     /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi,
