@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { findByModelCode } from "@/lib/match/modelCode";
 import { isAuthorized } from "@/lib/auth";
+import { mapPool } from "@/lib/pool";
 import type { Competitor } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -36,9 +37,9 @@ async function handle(req: Request) {
   );
 
   let found = 0;
-  for (const p of products) {
+  await mapPool(products, 4, async (p) => {
     const candidate = await findByModelCode(competitor, p.model_code);
-    if (!candidate) continue;
+    if (!candidate) return;
     found++;
     await query(
       `insert into competitor_products
@@ -52,15 +53,10 @@ async function handle(req: Request) {
                        then 'confirmed' else 'auto_found' end`,
       [p.id, competitor.id, candidate.url, candidate.confidence],
     );
-    await sleep(500);
-  }
+  });
 
   return NextResponse.json({ ok: true, competitor: slug, scanned: products.length, found });
 }
 
 export const GET = handle;
 export const POST = handle;
-
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}

@@ -1,5 +1,6 @@
 import { query } from "./db";
 import { fetchPrice } from "./fetchers";
+import { mapPool } from "./pool";
 import type { Competitor } from "./types";
 
 interface Job {
@@ -22,9 +23,11 @@ export interface RefreshSummary {
  * URL, fetches its current price, and appends a snapshot (append-only history).
  * Flags below_threshold when a competitor undercuts the Bosch minimum (MAP).
  *
- * Sequential with a small delay to stay polite to competitor sites.
+ * Runs with bounded concurrency so a few hundred products finish within
+ * Vercel's function time limit. An optional slug restricts the run to one
+ * competitor (handy for a first pilot run).
  */
-export async function runRefresh(): Promise<RefreshSummary> {
+export async function runRefresh(slug?: string): Promise<RefreshSummary> {
   const jobs = await query<Job & Record<string, unknown>>(
     `select cp.id as competitor_product_id,
             cp.product_url,
@@ -35,12 +38,14 @@ export async function runRefresh(): Promise<RefreshSummary> {
      join competitors c on c.id = cp.competitor_id
      where cp.product_url is not null
        and cp.match_status in ('auto_found','confirmed')
-       and c.is_active and tp.is_active`,
+       and c.is_active and tp.is_active
+       and ($1::text is null or c.slug = $1)`,
+    [slug ?? null],
   );
 
   const summary: RefreshSummary = { attempted: 0, ok: 0, not_found: 0, blocked: 0, error: 0 };
 
-  for (const job of jobs) {
+  await mapPool(jobs, 4, async (job) => {
     summary.attempted++;
     const result = await fetchPrice(job.competitor as Competitor, job.product_url as string);
     const belowThreshold =
@@ -67,13 +72,7 @@ export async function runRefresh(): Promise<RefreshSummary> {
     else if (result.fetch_status === "not_found") summary.not_found++;
     else if (result.fetch_status === "blocked") summary.blocked++;
     else summary.error++;
-
-    await sleep(750);
-  }
+  });
 
   return summary;
-}
-
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
 }
