@@ -58,8 +58,38 @@ npm run dev
 4. ✅ Tiered fetcher (JSON-LD + selector + scraping-API)
 5. ✅ Comparison dashboard (delta colouring, rank, MAP flags)
 6. ✅ Daily cron + append-only history + per-product trend chart
-7. ⏭️ Next: run the matcher against B.TECH, confirm ~20 URLs, do the first real refresh,
-   then roll out the remaining competitors and wire a scraping-API key for Amazon/Noon/Jumia.
+7. ✅ Deployed to Vercel (git-connected), DB connected, pipeline run end-to-end
+
+## Pilot findings (2026-07-26) — IMPORTANT before resuming
+
+The full pipeline works. The blocker is the **data source**: a plain server-side
+fetch does not yield real prices from these Egyptian sites. Diagnostic
+(`/api/debug`) results for one Bosch code across the 12 searchable competitors:
+
+| Competitor | Plain-fetch result | Needs |
+|---|---|---|
+| Raya | 200, but product list is JS-rendered; static JSON-LD is a placeholder `Offer price:0` whose url is the search page | JS rendering |
+| iMedia | search renders some links but product JSON-LD lacks the code | JS rendering / tuning |
+| Amazon | 200 with product links, no JSON-LD | custom parse + JS |
+| B.TECH, Bosch, Dream2000, Gaballah | 404 on guessed search URL | correct search URL + JS |
+| 2B, El Araby, Jumia | 403 (blocked) | scraping API |
+| Noon | timeout | scraping API |
+| Carrefour | 200 but empty (JS app) | scraping API |
+
+Conclusion: reliable capture needs a **JS-rendering scraping API** (Zyte /
+ScraperAPI). The integration already exists — set `SCRAPER_API_KEY` and switch a
+competitor's `fetch_method` to `api`. Two bugs found and fixed during the pilot:
+search-page URLs are no longer accepted as matches, and a JSON-LD `price:0` is
+treated as "no price" (not a real 0 EGP).
+
+### To resume
+1. Get a Zyte or ScraperAPI key; set `SCRAPER_API_KEY` (and `SCRAPER_API_PROVIDER`)
+   in Vercel env.
+2. Set the competitors you want to `fetch_method='api'` in `price_monitor.competitors`.
+3. Extend the matcher/fetcher to read product links from the JS-rendered HTML the
+   API returns (the DOM will contain real product tiles, unlike the static HTML).
+4. Correct the 404 search-URL templates (B.TECH etc.) against the live sites.
+5. Trigger `/api/match?slug=…` then `/api/cron/refresh`; verify in the dashboard.
 
 ## Deploying
 
