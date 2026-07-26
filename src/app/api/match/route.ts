@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { findByModelCode } from "@/lib/match/modelCode";
+import { isAuthorized } from "@/lib/auth";
 import type { Competitor } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -11,12 +12,12 @@ export const maxDuration = 300;
  * for each tracked product's Bosch model code and stores the best candidate URL
  * as an "auto_found" mapping for a human to confirm.
  *
- * POST /api/match?slug=btech   (Bearer CRON_SECRET)
+ * Auth: `Authorization: Bearer $CRON_SECRET` or `?token=$CRON_SECRET`.
+ * Supports both GET (browser-triggerable) and POST.
+ *   /api/match?slug=btech&token=$CRON_SECRET
  */
-export async function POST(req: Request) {
-  const secret = process.env.CRON_SECRET;
-  const auth = req.headers.get("authorization");
-  if (secret && auth !== `Bearer ${secret}`) {
+async function handle(req: Request) {
+  if (!isAuthorized(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -56,6 +57,9 @@ export async function POST(req: Request) {
 
   return NextResponse.json({ ok: true, competitor: slug, scanned: products.length, found });
 }
+
+export const GET = handle;
+export const POST = handle;
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
