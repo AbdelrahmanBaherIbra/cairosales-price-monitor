@@ -24,7 +24,7 @@ import type { Competitor } from "../src/lib/types";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/124.0 Safari/537.36";
-const WAIT = Number(process.env.RENDER_WAIT_MS ?? 2500);
+const WAIT = Number(process.env.RENDER_WAIT_MS ?? 4000);
 const CONCURRENCY = Number(process.env.SCRAPE_CONCURRENCY ?? 3);
 
 interface Product {
@@ -37,7 +37,11 @@ async function render(ctx: BrowserContext, url: string): Promise<string | null> 
   const page = await ctx.newPage();
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    // Let client-side search results / prices load, then nudge lazy content.
+    await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
     await page.waitForTimeout(WAIT);
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+    await page.waitForTimeout(1000);
     return await page.content();
   } catch {
     return null;

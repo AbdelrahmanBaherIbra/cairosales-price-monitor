@@ -40,4 +40,5 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SCRAPE_SLUGS: ${{ github.event.inputs.slugs }}
           SCRAPE_LIMIT: ${{ github.event.inputs.limit }}
+          SCRAPE_DEBUG: ${{ github.event.inputs.debug }}
         run: npm run scrape
