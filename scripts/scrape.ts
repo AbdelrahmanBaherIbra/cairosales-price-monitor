@@ -148,9 +148,12 @@ async function main() {
      order by slug`,
     [slugsArg && slugsArg.length ? slugsArg : null],
   );
+  const codeFilter = process.env.SCRAPE_CODE?.split(",").map((s) => s.trim()).filter(Boolean);
   const products = await query<Product>(
     `select id, model_code, threshold_price from tracked_products
-     where is_active order by model_code ${limit ? "limit " + limit : ""}`,
+     where is_active and ($1::text[] is null or model_code = any($1))
+     order by model_code ${limit ? "limit " + limit : ""}`,
+    [codeFilter && codeFilter.length ? codeFilter : null],
   );
 
   console.log(`Scraping ${competitors.length} competitor(s) x ${products.length} products`);

@@ -17,6 +17,10 @@ on:
         description: "Dump rendered-HTML diagnostics for the first product (1 = on)"
         required: false
         default: ""
+      code:
+        description: "Only scrape these model code(s), comma-separated (blank = all)"
+        required: false
+        default: ""
 
 jobs:
   scrape:
@@ -41,4 +45,5 @@ jobs:
           SCRAPE_SLUGS: ${{ github.event.inputs.slugs }}
           SCRAPE_LIMIT: ${{ github.event.inputs.limit }}
           SCRAPE_DEBUG: ${{ github.event.inputs.debug }}
+          SCRAPE_CODE: ${{ github.event.inputs.code }}
         run: npm run scrape
