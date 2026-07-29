@@ -75,6 +75,9 @@ async function scrapeCompetitor(browser: Browser, competitor: Competitor, produc
     }
 
     const candidate = findCandidateInHtml(searchHtml, p.model_code, competitor);
+    if (process.env.SCRAPE_DEBUG && index === 0) {
+      console.log(`  [${competitor.slug}] candidate: ${candidate?.url ?? "none"} (conf ${candidate?.confidence ?? "-"})`);
+    }
     if (!candidate) return;
     matched++;
 
@@ -95,6 +98,12 @@ async function scrapeCompetitor(browser: Browser, competitor: Competitor, produc
     const prodHtml = await render(ctx, candidate.url);
     const offer = prodHtml ? extractOfferFromHtml(prodHtml) : null;
     const price = offer?.price ?? null;
+    if (process.env.SCRAPE_DEBUG && index === 0) {
+      const hint = prodHtml?.match(/([\d,]{4,})\s*EGP/i)?.[0] ?? "none";
+      console.log(
+        `  [${competitor.slug}] product page: price=${price} jsonldProducts=${prodHtml ? extractProductsFromHtml(prodHtml).length : "no-html"} priceHint="${hint}"`,
+      );
+    }
     const belowThreshold =
       price != null && p.threshold_price != null ? price < Number(p.threshold_price) : null;
     if (price != null) priced++;
