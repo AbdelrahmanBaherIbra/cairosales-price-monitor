@@ -60,7 +60,7 @@ async function scrapeCompetitor(browser: Browser, competitor: Competitor, produc
   let priced = 0;
 
   await mapPool(products, CONCURRENCY, async (p, index) => {
-    const searchUrl = competitor.search_url_template!.replace(
+    const searchUrl = competitor.search_url_template!.replaceAll(
       "{query}",
       encodeURIComponent(p.model_code),
     );

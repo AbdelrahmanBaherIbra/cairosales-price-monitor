@@ -29,7 +29,7 @@ export async function findByModelCode(
 ): Promise<MatchCandidate | null> {
   if (!competitor.search_url_template) return null;
   const code = normalise(modelCode);
-  const searchUrl = competitor.search_url_template.replace(
+  const searchUrl = competitor.search_url_template.replaceAll(
     "{query}",
     encodeURIComponent(modelCode),
   );
