@@ -85,14 +85,18 @@ export function findCandidateInHtml(
     return { url: absolute(products[0].url, competitor), confidence: 0.7 };
   }
 
-  // 2. Anchor-href fallback (product pages only, not search pages)
-  const links = extractProductLinks(html, competitor.website_url ?? "").filter(
-    (l) => !isSearchUrl(l),
-  );
-  const inUrl = links.find((l) => normalise(l).includes(code));
-  if (inUrl) return { url: inUrl, confidence: 0.8 };
-  if (normalise(html).includes(code) && links.length === 1) {
-    return { url: links[0], confidence: 0.5 };
+  // 2. Anchor-href fallback. The strongest signal is a link whose URL contains
+  // the model code itself (e.g. Raya slugs like /ar/...-kgn56lb3e9-29351) —
+  // check ALL non-search links, regardless of URL shape.
+  const base = competitor.website_url ?? "";
+  const allLinks = extractAllLinks(html, base).filter((l) => !isSearchUrl(l));
+  const inUrl = allLinks.find((l) => normalise(l).includes(code));
+  if (inUrl) return { url: inUrl, confidence: 0.85 };
+
+  // Weaker: exactly one product-looking link on a page that mentions the code.
+  const productLinks = allLinks.filter(isProductLike);
+  if (normalise(html).includes(code) && productLinks.length === 1) {
+    return { url: productLinks[0], confidence: 0.5 };
   }
   return null;
 }
@@ -110,18 +114,26 @@ function absolute(href: string, competitor: Competitor): string {
   return toAbsolute(href, competitor.website_url ?? "") ?? href;
 }
 
-function extractProductLinks(html: string, base: string): string[] {
+/** All absolute, same-origin http(s) links on the page. */
+function extractAllLinks(html: string, base: string): string[] {
   const hrefs = [...html.matchAll(/href=["']([^"']+)["']/gi)].map((m) => m[1]);
   const abs = hrefs
     .map((h) => toAbsolute(h, base))
-    .filter((h): h is string => !!h)
-    .filter(
-      (h) =>
-        /\/(p|product|products|item|dp)\//i.test(h) || // /product/ style
-        /-p-?\d/i.test(h) || // ...-p-12345
-        (/\.html?($|\?)/i.test(h) && !/\/(category|cms|blog|account|cart|checkout|wishlist)\//i.test(h)), // Magento .html
-    );
+    .filter((h): h is string => !!h && /^https?:/i.test(h));
   return [...new Set(abs)];
+}
+
+/** Heuristic: does this URL look like a product page (not a category/cms page)? */
+function isProductLike(h: string): boolean {
+  if (/\/(category|categories|cms|blog|account|cart|checkout|wishlist|compare|login)\//i.test(h)) {
+    return false;
+  }
+  return (
+    /\/(p|product|products|item|dp)\//i.test(h) || // /product/ style
+    /-p-?\d/i.test(h) || // ...-p-12345
+    /-\d{3,}(\?|$)/.test(h) || // ...-29351 (Raya-style trailing id)
+    /\.html?($|\?)/i.test(h) // Magento .html
+  );
 }
 
 function toAbsolute(href: string, base: string): string | null {

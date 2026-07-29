@@ -17,7 +17,7 @@
 import { chromium, type Browser, type BrowserContext } from "playwright";
 import { query, closePool } from "../src/lib/db";
 import { findCandidateInHtml } from "../src/lib/match/modelCode";
-import { extractOfferFromHtml } from "../src/lib/fetchers/html";
+import { extractOfferFromHtml, extractProductsFromHtml } from "../src/lib/fetchers/html";
 import { mapPool } from "../src/lib/pool";
 import type { Competitor } from "../src/lib/types";
 
@@ -55,13 +55,20 @@ async function scrapeCompetitor(browser: Browser, competitor: Competitor, produc
   let matched = 0;
   let priced = 0;
 
-  await mapPool(products, CONCURRENCY, async (p) => {
+  await mapPool(products, CONCURRENCY, async (p, index) => {
     const searchUrl = competitor.search_url_template!.replace(
       "{query}",
       encodeURIComponent(p.model_code),
     );
     const searchHtml = await render(ctx, searchUrl);
-    if (!searchHtml) return;
+    if (!searchHtml) {
+      if (index === 0) console.log(`  [${competitor.slug}] DEBUG render returned null for ${searchUrl}`);
+      return;
+    }
+
+    if (process.env.SCRAPE_DEBUG && index === 0) {
+      debugDump(competitor.slug, p.model_code, searchUrl, searchHtml);
+    }
 
     const candidate = findCandidateInHtml(searchHtml, p.model_code, competitor);
     if (!candidate) return;
@@ -106,6 +113,24 @@ async function scrapeCompetitor(browser: Browser, competitor: Competitor, produc
 
   await ctx.close();
   console.log(`  [${competitor.slug}] scanned ${products.length}, matched ${matched}, priced ${priced}`);
+}
+
+function debugDump(slug: string, code: string, url: string, html: string) {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const c = norm(code);
+  const hrefs = [...html.matchAll(/href=["']([^"']+)["']/gi)].map((m) => m[1]);
+  const withCode = hrefs.filter((h) => norm(h).includes(c));
+  const htmlLinks = hrefs.filter((h) => /\.html?($|\?)/i.test(h));
+  const products = extractProductsFromHtml(html)
+    .slice(0, 5)
+    .map((p) => ({ url: p.url, sku: p.sku, name: p.name?.slice(0, 40) }));
+  console.log(`  [${slug}] === DEBUG ${code} ===`);
+  console.log(`    searchUrl: ${url}`);
+  console.log(`    htmlLen: ${html.length}  totalHrefs: ${hrefs.length}  .htmlLinks: ${htmlLinks.length}`);
+  console.log(`    codeInHtml: ${norm(html).includes(c)}`);
+  console.log(`    jsonldProducts: ${JSON.stringify(products)}`);
+  console.log(`    hrefsContainingCode: ${JSON.stringify(withCode.slice(0, 5))}`);
+  console.log(`    sample .htmlLinks: ${JSON.stringify(htmlLinks.slice(0, 8))}`);
 }
 
 async function main() {

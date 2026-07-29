@@ -13,6 +13,10 @@ on:
         description: "Max products per competitor (blank = all)"
         required: false
         default: ""
+      debug:
+        description: "Dump rendered-HTML diagnostics for the first product (1 = on)"
+        required: false
+        default: ""
 
 jobs:
   scrape:
