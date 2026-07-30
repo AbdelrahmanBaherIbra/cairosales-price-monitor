@@ -81,23 +81,16 @@ export function findCandidateInHtml(
     const urlHit = p.url && normalise(p.url).includes(code);
     if ((nameHit || urlHit) && p.url) return { url: absolute(p.url, competitor), confidence: 0.85 };
   }
-  if (products.length === 1 && products[0].url && normalise(html).includes(code)) {
-    return { url: absolute(products[0].url, competitor), confidence: 0.7 };
-  }
 
-  // 2. Anchor-href fallback. The strongest signal is a link whose URL contains
-  // the model code itself (e.g. Raya slugs like /ar/...-kgn56lb3e9-29351) —
-  // check ALL non-search links, regardless of URL shape.
+  // 2. Anchor-href fallback: a link whose URL contains the model code itself
+  // (e.g. Raya slugs like /ar/...-kgn56lb3e9-29351). This is a strong, precise
+  // signal. We deliberately do NOT guess from "only one product on the page" —
+  // that produced false matches (e.g. code mentioned in a related-items strip).
   const base = competitor.website_url ?? "";
   const allLinks = extractAllLinks(html, base).filter((l) => !isSearchUrl(l));
   const inUrl = allLinks.find((l) => normalise(l).includes(code));
   if (inUrl) return { url: inUrl, confidence: 0.85 };
 
-  // Weaker: exactly one product-looking link on a page that mentions the code.
-  const productLinks = allLinks.filter(isProductLike);
-  if (normalise(html).includes(code) && productLinks.length === 1) {
-    return { url: productLinks[0], confidence: 0.5 };
-  }
   return null;
 }
 
@@ -121,19 +114,6 @@ function extractAllLinks(html: string, base: string): string[] {
     .map((h) => toAbsolute(h, base))
     .filter((h): h is string => !!h && /^https?:/i.test(h));
   return [...new Set(abs)];
-}
-
-/** Heuristic: does this URL look like a product page (not a category/cms page)? */
-function isProductLike(h: string): boolean {
-  if (/\/(category|categories|cms|blog|account|cart|checkout|wishlist|compare|login)\//i.test(h)) {
-    return false;
-  }
-  return (
-    /\/(p|product|products|item|dp)\//i.test(h) || // /product/ style
-    /-p-?\d/i.test(h) || // ...-p-12345
-    /-\d{3,}(\?|$)/.test(h) || // ...-29351 (Raya-style trailing id)
-    /\.html?($|\?)/i.test(h) // Magento .html
-  );
 }
 
 function toAbsolute(href: string, base: string): string | null {
