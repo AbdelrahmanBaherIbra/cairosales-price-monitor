@@ -85,44 +85,39 @@ async function searchAndMatch(
             !!h &&
             /\/(p|product|products|item|dp)\//i.test(h) &&
             !/\.(png|jpe?g|webp|gif|svg|avif)(\?|#|$)/i.test(h);
-          // Walk up from a signal element to the product link of its card.
-          const linkFrom = (start: Element | null): string | null => {
-            let el: Element | null = start;
-            for (let i = 0; i < 10 && el; i++, el = el.parentElement) {
-              if (el.matches?.("a[href]") && isProd(el.getAttribute("href"))) {
-                return (el as HTMLAnchorElement).href;
-              }
-              const anchors = Array.from(el.querySelectorAll("a[href]")) as HTMLAnchorElement[];
-              const prod = anchors.find((a) => isProd(a.getAttribute("href")));
-              if (prod) return prod.href;
-            }
-            return null;
-          };
-          // 1) Image whose src/alt filename contains the exact code (B.TECH style).
-          const imgs = Array.from(document.querySelectorAll("img")) as HTMLImageElement[];
-          for (const img of imgs) {
-            const inImg =
-              norm(img.getAttribute("src")).includes(c) ||
-              norm(img.getAttribute("data-src")).includes(c) ||
-              norm(img.getAttribute("srcset")).includes(c) ||
-              norm(img.getAttribute("alt")).includes(c);
-            if (inImg) {
-              const u = linkFrom(img);
-              if (u) return u;
-            }
+          const anchors = (Array.from(document.querySelectorAll("a[href]")) as HTMLAnchorElement[])
+            .filter((a) => isProd(a.getAttribute("href")));
+          // The right product card is the one whose OWN content references the
+          // exact code (e.g. its product-image URL embeds the SKU). This scopes
+          // per-card, so a cousin model's card is never picked.
+          for (const a of anchors) {
+            if (norm(a.outerHTML).includes(c)) return a.href;
           }
-          // 2) Visible text containing the code (sites that print the SKU).
-          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-          let node: Node | null;
-          while ((node = walker.nextNode())) {
-            if (!norm(node.nodeValue).includes(c)) continue;
-            const u = linkFrom(node.parentElement);
-            if (u) return u;
+          // Some cards keep the image just outside the link — widen to the card.
+          for (const a of anchors) {
+            const card = a.closest("article, li, [class*='card'], [class*='product']") ?? a.parentElement;
+            if (card && norm(card.outerHTML).includes(c)) return a.href;
           }
           return null;
         }, code)
         .catch(() => null);
       if (url) candidate = { url, confidence: 0.8 };
+    }
+    if (process.env.SCRAPE_DEBUG) {
+      const diag = await page
+        .evaluate((codeArg: string) => {
+          const norm = (s: string | null) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+          const c = norm(codeArg);
+          const anchors = (Array.from(document.querySelectorAll("a[href]")) as HTMLAnchorElement[])
+            .filter((a) => /\/p\//i.test(a.getAttribute("href") || ""));
+          return anchors.slice(0, 6).map((a) => ({
+            href: (a.getAttribute("href") || "").slice(0, 55),
+            codeInAnchor: norm(a.outerHTML).includes(c),
+            imgs: a.querySelectorAll("img").length,
+          }));
+        }, code)
+        .catch(() => []);
+      console.log(`  [${competitor.slug}] DOM anchors: ${JSON.stringify(diag)}`);
     }
     return { candidate, html };
   } catch {
