@@ -87,11 +87,37 @@ export function findCandidateInHtml(
   // signal. We deliberately do NOT guess from "only one product on the page" —
   // that produced false matches (e.g. code mentioned in a related-items strip).
   const base = competitor.website_url ?? "";
-  const allLinks = extractAllLinks(html, base).filter((l) => !isSearchUrl(l));
-  const inUrl = allLinks.find((l) => normalise(l).includes(code));
-  if (inUrl) return { url: inUrl, confidence: 0.85 };
+  const candidates = extractAllLinks(html, base)
+    .filter((l) => !isSearchUrl(l) && !isAsset(l)) // skip image/asset URLs
+    .filter((l) => normalise(l).includes(code));
+  if (candidates.length) {
+    // Product images often embed the code too, but live on a media/cdn host —
+    // prefer a real product-path link on the main site.
+    const best =
+      candidates.find(isProductPath) ??
+      candidates.find((l) => !isAssetHost(l)) ??
+      candidates[0];
+    return { url: best, confidence: 0.85 };
+  }
 
   return null;
+}
+
+/** Asset URLs (images, styles, scripts, docs) are never product pages. */
+function isAsset(url: string): boolean {
+  return /\.(png|jpe?g|webp|gif|svg|avif|bmp|ico|pdf|css|js|mp4|webm|woff2?)(\?|#|$)/i.test(url);
+}
+
+function isAssetHost(url: string): boolean {
+  try {
+    return /^(media|cdn|images?|img|assets?|static)\./i.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isProductPath(url: string): boolean {
+  return /\/(p|product|products|item|dp)\//i.test(url) || /-\d{3,}(\?|#|$)/.test(url);
 }
 
 /** True for search / listing URLs, which are never valid product matches. */
