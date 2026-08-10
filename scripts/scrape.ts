@@ -219,6 +219,18 @@ function debugDump(slug: string, code: string, url: string, html: string) {
   console.log(`    jsonldProducts: ${JSON.stringify(products)}`);
   console.log(`    hrefsContainingCode: ${JSON.stringify(withCode.slice(0, 5))}`);
   console.log(`    sample .htmlLinks: ${JSON.stringify(htmlLinks.slice(0, 8))}`);
+  // Embedded data-blob diagnostics: where does the code live in the page source?
+  const nd = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+  const prodPaths = hrefs.filter((h) => /\/p\//i.test(h)).slice(0, 6);
+  console.log(`    __NEXT_DATA__: ${nd ? nd[1].length + " chars" : "absent"}  __next_f: ${/__next_f/.test(html)}`);
+  console.log(`    productPathHrefs: ${JSON.stringify(prodPaths)}`);
+  const lower = html.toLowerCase();
+  const cl = code.toLowerCase();
+  const ctxs: string[] = [];
+  for (let idx = lower.indexOf(cl); idx !== -1 && ctxs.length < 4; idx = lower.indexOf(cl, idx + cl.length)) {
+    ctxs.push(html.slice(Math.max(0, idx - 160), idx + 160).replace(/\s+/g, " "));
+  }
+  ctxs.forEach((ctx, i) => console.log(`    ctx${i}: …${ctx}…`));
 }
 
 async function main() {
