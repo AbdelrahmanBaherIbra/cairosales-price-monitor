@@ -100,7 +100,45 @@ export function findCandidateInHtml(
     return { url: best, confidence: 0.85 };
   }
 
+  // 3. Proximity fallback: the exact code appears somewhere in a product card
+  // (e.g. inside the card's image URL) with no code in any product link. Take
+  // the product-path link physically nearest to a code occurrence in the HTML.
+  // Cousin-safe: a different model's code never appears, so nothing matches.
+  const prox = findByProximity(html, modelCode, base);
+  if (prox) return { url: prox, confidence: 0.8 };
+
   return null;
+}
+
+/**
+ * Nearest product-path link to a code-bearing PRODUCT IMAGE in the page source.
+ * We anchor on the code inside an image filename (which always lives in the
+ * right product card) — NOT on any code occurrence, since the header search box
+ * echoes the code too and would drag matches to whatever card renders first.
+ */
+function findByProximity(html: string, modelCode: string, base: string): string | null {
+  const needle = modelCode.toLowerCase();
+  if (needle.length < 4) return null;
+  const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // code embedded in an image URL, e.g. .../36d9..._SMS6EMI62V_STP_def.png
+  const imgRe = new RegExp(`[^"'\\s>]*${esc}[^"'\\s>]*\\.(?:png|jpe?g|webp|gif|svg|avif)`, "gi");
+  const anchors: number[] = [];
+  let im: RegExpExecArray | null;
+  while ((im = imgRe.exec(html)) !== null) anchors.push(im.index);
+  if (!anchors.length) return null;
+
+  const hrefRe = /href=["']([^"']+)["']/gi;
+  let best: { url: string; dist: number } | null = null;
+  let m: RegExpExecArray | null;
+  while ((m = hrefRe.exec(html)) !== null) {
+    const abs = toAbsolute(m[1], base);
+    if (!abs || isSearchUrl(abs) || isAsset(abs) || !isProductPath(abs)) continue;
+    let dist = Infinity;
+    for (const cp of anchors) dist = Math.min(dist, Math.abs(cp - m.index));
+    if (!best || dist < best.dist) best = { url: abs, dist };
+  }
+  // Only trust a link that sits close to the image (same card), not page-wide.
+  return best && best.dist < 4000 ? best.url : null;
 }
 
 /** Asset URLs (images, styles, scripts, docs) are never product pages. */
