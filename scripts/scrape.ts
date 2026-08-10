@@ -16,7 +16,7 @@
  */
 import { chromium, type Browser, type BrowserContext } from "playwright";
 import { query, closePool } from "../src/lib/db";
-import { findCandidateInHtml } from "../src/lib/match/modelCode";
+import { findCandidateInHtml, type MatchCandidate } from "../src/lib/match/modelCode";
 import { extractOfferFromHtml, extractProductsFromHtml } from "../src/lib/fetchers/html";
 import { mapPool } from "../src/lib/pool";
 import type { Competitor } from "../src/lib/types";
@@ -50,6 +50,65 @@ async function render(ctx: BrowserContext, url: string): Promise<string | null> 
   }
 }
 
+/**
+ * Render a competitor's search page and find the product URL for a code.
+ *   1) findCandidateInHtml (code in URL / JSON-LD sku) — precise.
+ *   2) DOM tile fallback: locate the product tile whose visible text contains
+ *      the EXACT code and take that tile's product link. Catches products with
+ *      opaque URLs (e.g. B.TECH's /en/p/<uuid>) without matching cousin models.
+ */
+async function searchAndMatch(
+  ctx: BrowserContext,
+  competitor: Competitor,
+  code: string,
+): Promise<{ candidate: MatchCandidate | null; html: string } | null> {
+  const searchUrl = competitor.search_url_template!.replaceAll(
+    "{query}",
+    encodeURIComponent(code),
+  );
+  const page = await ctx.newPage();
+  try {
+    await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(WAIT);
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+    await page.waitForTimeout(1000);
+    const html = await page.content();
+
+    let candidate = findCandidateInHtml(html, code, competitor);
+    if (!candidate) {
+      const url = await page
+        .evaluate((codeArg: string) => {
+          const norm = (s: string | null) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+          const c = norm(codeArg);
+          const isProd = (h: string | null) =>
+            !!h &&
+            /\/(p|product|products|item|dp)\//i.test(h) &&
+            !/\.(png|jpe?g|webp|gif|svg|avif)(\?|#|$)/i.test(h);
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          let node: Node | null;
+          while ((node = walker.nextNode())) {
+            if (!norm(node.nodeValue).includes(c)) continue;
+            let el: Element | null = node.parentElement;
+            for (let i = 0; i < 8 && el; i++, el = el.parentElement) {
+              const anchors = Array.from(el.querySelectorAll("a[href]")) as HTMLAnchorElement[];
+              const prod = anchors.find((a) => isProd(a.getAttribute("href")));
+              if (prod) return prod.href;
+            }
+          }
+          return null;
+        }, code)
+        .catch(() => null);
+      if (url) candidate = { url, confidence: 0.8 };
+    }
+    return { candidate, html };
+  } catch {
+    return null;
+  } finally {
+    await page.close();
+  }
+}
+
 async function scrapeCompetitor(browser: Browser, competitor: Competitor, products: Product[]) {
   if (!competitor.search_url_template) {
     console.log(`  [${competitor.slug}] no search_url_template, skipping`);
@@ -60,22 +119,15 @@ async function scrapeCompetitor(browser: Browser, competitor: Competitor, produc
   let priced = 0;
 
   await mapPool(products, CONCURRENCY, async (p, index) => {
-    const searchUrl = competitor.search_url_template!.replaceAll(
-      "{query}",
-      encodeURIComponent(p.model_code),
-    );
-    const searchHtml = await render(ctx, searchUrl);
-    if (!searchHtml) {
-      if (index === 0) console.log(`  [${competitor.slug}] DEBUG render returned null for ${searchUrl}`);
+    const result = await searchAndMatch(ctx, competitor, p.model_code);
+    if (!result) {
+      if (index === 0) console.log(`  [${competitor.slug}] DEBUG search render failed`);
       return;
     }
-
+    const candidate = result.candidate;
     if (process.env.SCRAPE_DEBUG && index === 0) {
-      debugDump(competitor.slug, p.model_code, searchUrl, searchHtml);
-    }
-
-    const candidate = findCandidateInHtml(searchHtml, p.model_code, competitor);
-    if (process.env.SCRAPE_DEBUG && index === 0) {
+      const searchUrl = competitor.search_url_template!.replaceAll("{query}", encodeURIComponent(p.model_code));
+      debugDump(competitor.slug, p.model_code, searchUrl, result.html);
       console.log(`  [${competitor.slug}] candidate: ${candidate?.url ?? "none"} (conf ${candidate?.confidence ?? "-"})`);
     }
     if (!candidate) return;
