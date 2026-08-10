@@ -16,8 +16,12 @@
  */
 import { chromium, type Browser, type BrowserContext } from "playwright";
 import { query, closePool } from "../src/lib/db";
-import { findCandidateInHtml, type MatchCandidate } from "../src/lib/match/modelCode";
-import { extractOfferFromHtml, extractProductsFromHtml } from "../src/lib/fetchers/html";
+import {
+  findCandidateInHtml,
+  extractProductCandidates,
+  type MatchCandidate,
+} from "../src/lib/match/modelCode";
+import { extractOfferFromHtml, extractProductsFromHtml, type ParsedOffer } from "../src/lib/fetchers/html";
 import { mapPool } from "../src/lib/pool";
 import type { Competitor } from "../src/lib/types";
 
@@ -127,6 +131,36 @@ async function searchAndMatch(
   }
 }
 
+/**
+ * Open candidate product pages from a search result and return the first whose
+ * MAIN product identity (title / h1 / JSON-LD sku|name) contains the exact code.
+ * Cousin-safe: a page for a different model won't carry the searched code as its
+ * identity. Returns that page's parsed offer so the caller needn't re-fetch.
+ */
+async function verifyOnProductPages(
+  ctx: BrowserContext,
+  competitor: Competitor,
+  code: string,
+  searchHtml: string,
+): Promise<{ url: string; offer: ParsedOffer | null } | null> {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const c = norm(code);
+  const candidates = extractProductCandidates(searchHtml, competitor).slice(0, 5);
+  for (const url of candidates) {
+    const prodHtml = await render(ctx, url);
+    if (!prodHtml) continue;
+    const title = norm(prodHtml.match(/<title>([^<]*)<\/title>/i)?.[1] ?? "");
+    const h1 = norm((prodHtml.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1] ?? "").replace(/<[^>]+>/g, ""));
+    const inIdentity = extractProductsFromHtml(prodHtml).some(
+      (pr) => norm(pr.sku ?? "").includes(c) || norm(pr.name ?? "").includes(c),
+    );
+    if (title.includes(c) || h1.includes(c) || inIdentity) {
+      return { url, offer: extractOfferFromHtml(prodHtml) };
+    }
+  }
+  return null;
+}
+
 async function scrapeCompetitor(browser: Browser, competitor: Competitor, products: Product[]) {
   if (!competitor.search_url_template) {
     console.log(`  [${competitor.slug}] no search_url_template, skipping`);
@@ -142,7 +176,18 @@ async function scrapeCompetitor(browser: Browser, competitor: Competitor, produc
       if (index === 0) console.log(`  [${competitor.slug}] DEBUG search render failed`);
       return;
     }
-    const candidate = result.candidate;
+    let candidate = result.candidate;
+    // Verify-on-product-page fallback: for sites whose search cards aren't real
+    // links (B.TECH), open each candidate product page and accept the first
+    // whose title/JSON-LD carries the EXACT code. Reuses that page's price.
+    let prefetchedOffer: ParsedOffer | null | undefined;
+    if (!candidate) {
+      const verified = await verifyOnProductPages(ctx, competitor, p.model_code, result.html);
+      if (verified) {
+        candidate = { url: verified.url, confidence: 0.8 };
+        prefetchedOffer = verified.offer;
+      }
+    }
     if (process.env.SCRAPE_DEBUG && index === 0) {
       const searchUrl = competitor.search_url_template!.replaceAll("{query}", encodeURIComponent(p.model_code));
       debugDump(competitor.slug, p.model_code, searchUrl, result.html);
@@ -164,15 +209,17 @@ async function scrapeCompetitor(browser: Browser, competitor: Competitor, produc
       [p.id, competitor.id, candidate.url, candidate.confidence],
     );
 
-    // Render the product page and extract its price.
-    const prodHtml = await render(ctx, candidate.url);
-    const offer = prodHtml ? extractOfferFromHtml(prodHtml) : null;
+    // Reuse the verify-path offer, else render the product page for its price.
+    let offer: ParsedOffer | null;
+    if (prefetchedOffer !== undefined) {
+      offer = prefetchedOffer;
+    } else {
+      const prodHtml = await render(ctx, candidate.url);
+      offer = prodHtml ? extractOfferFromHtml(prodHtml) : null;
+    }
     const price = offer?.price ?? null;
     if (process.env.SCRAPE_DEBUG && index === 0) {
-      const hint = prodHtml?.match(/([\d,]{4,})\s*EGP/i)?.[0] ?? "none";
-      console.log(
-        `  [${competitor.slug}] product page: price=${price} jsonldProducts=${prodHtml ? extractProductsFromHtml(prodHtml).length : "no-html"} priceHint="${hint}"`,
-      );
+      console.log(`  [${competitor.slug}] product page: price=${price}`);
     }
     const belowThreshold =
       price != null && p.threshold_price != null ? price < Number(p.threshold_price) : null;

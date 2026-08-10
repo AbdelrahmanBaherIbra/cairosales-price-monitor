@@ -111,6 +111,28 @@ export function findCandidateInHtml(
 }
 
 /**
+ * All candidate product-page URLs on a search page, in document order (≈ search
+ * relevance). Used by the scraper's verify-on-product-page fallback for sites
+ * whose search cards aren't real links (e.g. B.TECH's JS-built UUID cards).
+ */
+export function extractProductCandidates(html: string, competitor: Competitor): string[] {
+  const base = competitor.website_url ?? "";
+  const re = /href=["']([^"']+)["']/gi;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const abs = toAbsolute(m[1], base);
+    if (!abs || isSearchUrl(abs) || isAsset(abs) || !isProductPath(abs)) continue;
+    if (!seen.has(abs)) {
+      seen.add(abs);
+      out.push(abs);
+    }
+  }
+  return out;
+}
+
+/**
  * Nearest product-path link to a code-bearing PRODUCT IMAGE in the page source.
  * We anchor on the code inside an image filename (which always lives in the
  * right product card) — NOT on any code occurrence, since the header search box
