@@ -85,16 +85,39 @@ async function searchAndMatch(
             !!h &&
             /\/(p|product|products|item|dp)\//i.test(h) &&
             !/\.(png|jpe?g|webp|gif|svg|avif)(\?|#|$)/i.test(h);
-          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-          let node: Node | null;
-          while ((node = walker.nextNode())) {
-            if (!norm(node.nodeValue).includes(c)) continue;
-            let el: Element | null = node.parentElement;
-            for (let i = 0; i < 8 && el; i++, el = el.parentElement) {
+          // Walk up from a signal element to the product link of its card.
+          const linkFrom = (start: Element | null): string | null => {
+            let el: Element | null = start;
+            for (let i = 0; i < 10 && el; i++, el = el.parentElement) {
+              if (el.matches?.("a[href]") && isProd(el.getAttribute("href"))) {
+                return (el as HTMLAnchorElement).href;
+              }
               const anchors = Array.from(el.querySelectorAll("a[href]")) as HTMLAnchorElement[];
               const prod = anchors.find((a) => isProd(a.getAttribute("href")));
               if (prod) return prod.href;
             }
+            return null;
+          };
+          // 1) Image whose src/alt filename contains the exact code (B.TECH style).
+          const imgs = Array.from(document.querySelectorAll("img")) as HTMLImageElement[];
+          for (const img of imgs) {
+            const inImg =
+              norm(img.getAttribute("src")).includes(c) ||
+              norm(img.getAttribute("data-src")).includes(c) ||
+              norm(img.getAttribute("srcset")).includes(c) ||
+              norm(img.getAttribute("alt")).includes(c);
+            if (inImg) {
+              const u = linkFrom(img);
+              if (u) return u;
+            }
+          }
+          // 2) Visible text containing the code (sites that print the SKU).
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          let node: Node | null;
+          while ((node = walker.nextNode())) {
+            if (!norm(node.nodeValue).includes(c)) continue;
+            const u = linkFrom(node.parentElement);
+            if (u) return u;
           }
           return null;
         }, code)
