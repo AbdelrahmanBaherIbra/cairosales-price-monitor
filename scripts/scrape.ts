@@ -21,7 +21,12 @@ import {
   extractProductCandidates,
   type MatchCandidate,
 } from "../src/lib/match/modelCode";
-import { extractOfferFromHtml, extractProductsFromHtml, type ParsedOffer } from "../src/lib/fetchers/html";
+import {
+  extractOfferFromHtml,
+  extractProductsFromHtml,
+  priceFromDataLayer,
+  type ParsedOffer,
+} from "../src/lib/fetchers/html";
 import { mapPool } from "../src/lib/pool";
 import type { Competitor } from "../src/lib/types";
 
@@ -188,6 +193,13 @@ async function scrapeCompetitor(browser: Browser, competitor: Competitor, produc
         prefetchedOffer = verified.offer;
       }
     }
+    // GA4 dataLayer (server-rendered) — reliable name+price on Magento sites like
+    // 2B. Confirms a match when the JS tiles didn't render, and supplies price.
+    const dlPrice = priceFromDataLayer(result.html, p.model_code);
+    if (!candidate && dlPrice != null) {
+      const searchUrl = competitor.search_url_template!.replaceAll("{query}", encodeURIComponent(p.model_code));
+      candidate = { url: searchUrl, confidence: 0.85 };
+    }
     if (process.env.SCRAPE_DEBUG && index === 0) {
       const searchUrl = competitor.search_url_template!.replaceAll("{query}", encodeURIComponent(p.model_code));
       debugDump(competitor.slug, p.model_code, searchUrl, result.html);
@@ -210,14 +222,20 @@ async function scrapeCompetitor(browser: Browser, competitor: Competitor, produc
     );
 
     // Reuse the verify-path offer, else render the product page for its price.
+    // Skip the product-page fetch when the URL is just the search page (dataLayer
+    // match) — there's no product JSON-LD to gain there.
     let offer: ParsedOffer | null;
+    const isSearchFallbackUrl = candidate.url.includes("catalogsearch") || candidate.url.includes("/s?q=");
     if (prefetchedOffer !== undefined) {
       offer = prefetchedOffer;
+    } else if (isSearchFallbackUrl) {
+      offer = null;
     } else {
       const prodHtml = await render(ctx, candidate.url);
       offer = prodHtml ? extractOfferFromHtml(prodHtml) : null;
     }
-    const price = offer?.price ?? null;
+    // Price: product-page JSON-LD if present, else the dataLayer price.
+    const price = offer?.price ?? dlPrice ?? null;
     if (process.env.SCRAPE_DEBUG && index === 0) {
       console.log(`  [${competitor.slug}] product page: price=${price}`);
     }

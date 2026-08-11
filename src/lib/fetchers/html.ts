@@ -128,6 +128,26 @@ function parseOffers(offers: unknown): ParsedOffer | null {
   };
 }
 
+/**
+ * Price from a GA4 / dataLayer ecommerce items block, matched by the model code
+ * appearing in item_name. Many Magento sites (e.g. 2B) server-render this even
+ * when the product page has no JSON-LD and the visual tiles load via JS.
+ */
+export function priceFromDataLayer(html: string, modelCode: string): number | null {
+  const needle = modelCode.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (needle.length < 4) return null;
+  const re = /"item_name"\s*:\s*"([^"]+)"[\s\S]{0,400}?"price"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)"?/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const name = m[1].toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (name.includes(needle)) {
+      const p = parseFloat(m[2]);
+      if (Number.isFinite(p) && p > 0) return p;
+    }
+  }
+  return null;
+}
+
 function toNumber(v: unknown): number | null {
   if (v == null) return null;
   const n = typeof v === "number" ? v : parseFloat(String(v).replace(/[^0-9.]/g, ""));
