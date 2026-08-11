@@ -175,7 +175,13 @@ async function scrapeCompetitor(browser: Browser, competitor: Competitor, produc
   let matched = 0;
   let priced = 0;
 
-  await mapPool(products, CONCURRENCY, async (p, index) => {
+  // Bot-protected sites (config.throttle) are scraped one-at-a-time with a delay
+  // so the traffic looks human and doesn't trip rate limiting.
+  const throttle = (competitor.config as { throttle?: boolean } | null)?.throttle === true;
+  const conc = throttle ? 1 : CONCURRENCY;
+
+  await mapPool(products, conc, async (p, index) => {
+    if (throttle && index > 0) await new Promise((r) => setTimeout(r, 2500));
     const result = await searchAndMatch(ctx, competitor, p.model_code);
     if (!result) {
       if (index === 0) console.log(`  [${competitor.slug}] DEBUG search render failed`);
