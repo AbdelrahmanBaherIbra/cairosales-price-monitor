@@ -335,9 +335,90 @@ function debugDump(slug: string, code: string, url: string, html: string) {
   ctxs.forEach((ctx, i) => console.log(`    ctx${i}: …${ctx}…`));
 }
 
+/**
+ * REFRESH mode (the cheap daily job): don't search — just re-open each already
+ * matched product URL and record its current price. This is ~1 page load per
+ * mapping instead of a full search+match, which is what makes daily runs at
+ * scale affordable.
+ */
+async function refreshPrices(browser: Browser, slugsArg?: string[]) {
+  const rows = await query<{
+    cp_id: string;
+    product_url: string;
+    threshold_price: number | null;
+    slug: string;
+    throttle: boolean;
+  }>(
+    `select cp.id as cp_id, cp.product_url, tp.threshold_price, c.slug,
+            coalesce((c.config->>'throttle')::boolean, false) as throttle
+     from price_monitor.competitor_products cp
+     join price_monitor.competitors c on c.id = cp.competitor_id and c.is_active
+     join price_monitor.tracked_products tp on tp.id = cp.tracked_product_id and tp.is_active
+     where cp.product_url is not null
+       and cp.product_url not like '%catalogsearch%'
+       and cp.product_url not like '%/s?q=%'
+       and cp.product_url not like '%/search?%'
+       and ($1::text[] is null or c.slug = any($1))
+     order by c.slug`,
+    [slugsArg && slugsArg.length ? slugsArg : null],
+  );
+
+  const bySlug = new Map<string, typeof rows>();
+  for (const r of rows) {
+    if (!bySlug.has(r.slug)) bySlug.set(r.slug, []);
+    bySlug.get(r.slug)!.push(r);
+  }
+
+  const ctx = await browser.newContext({ userAgent: UA, locale: "en-US" });
+  for (const [slug, list] of bySlug) {
+    const throttle = list[0].throttle;
+    const conc = throttle ? 1 : CONCURRENCY;
+    let priced = 0;
+    await mapPool(list, conc, async (r, i) => {
+      if (throttle && i > 0) await new Promise((res) => setTimeout(res, 2500));
+      const prodHtml = await render(ctx, r.product_url);
+      const offer = prodHtml ? extractOfferFromHtml(prodHtml) : null;
+      const price = offer?.price ?? null;
+      const below =
+        price != null && r.threshold_price != null ? price < Number(r.threshold_price) : null;
+      if (price != null) priced++;
+      await query(
+        `insert into price_snapshots
+           (competitor_product_id, price, currency, in_stock, below_threshold, fetch_status, raw)
+         values ($1,$2,$3,$4,$5,$6,$7)`,
+        [
+          r.cp_id,
+          price,
+          offer?.currency ?? "EGP",
+          offer?.inStock ?? null,
+          below,
+          price != null ? "ok" : "not_found",
+          offer ? JSON.stringify(offer.raw) : null,
+        ],
+      );
+    });
+    console.log(`  [${slug}] refreshed ${list.length}, priced ${priced}`);
+  }
+  await ctx.close();
+}
+
 async function main() {
+  const mode = process.env.SCRAPE_MODE || "refresh"; // 'refresh' (daily) | 'match' (find URLs)
   const slugsArg = process.env.SCRAPE_SLUGS?.split(",").map((s) => s.trim()).filter(Boolean);
   const limit = process.env.SCRAPE_LIMIT ? Number(process.env.SCRAPE_LIMIT) : null;
+
+  if (mode === "refresh") {
+    console.log("Mode: refresh (price-only on existing matches)");
+    const browser = await chromium.launch({ args: ["--no-sandbox"] });
+    try {
+      await refreshPrices(browser, slugsArg);
+    } finally {
+      await browser.close();
+      await closePool();
+    }
+    console.log("Done.");
+    return;
+  }
 
   const competitors = await query<Competitor>(
     `select * from competitors
@@ -360,7 +441,7 @@ async function main() {
   );
   const allCodes = allCodeRows.map((r) => norm(r.model_code));
 
-  console.log(`Scraping ${competitors.length} competitor(s) x ${products.length} products`);
+  console.log(`Mode: match — ${competitors.length} competitor(s) x ${products.length} products`);
   const browser = await chromium.launch({ args: ["--no-sandbox"] });
   try {
     for (const c of competitors) {

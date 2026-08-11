@@ -5,6 +5,10 @@ on:
     - cron: "0 5 * * *" # 05:00 UTC = 07:00 Cairo
   workflow_dispatch: # allow manual runs from the Actions tab
     inputs:
+      mode:
+        description: "refresh (price-only, daily) | match (find product URLs)"
+        required: false
+        default: "match"
       slugs:
         description: "Comma-separated competitor slugs (blank = all)"
         required: false
@@ -42,6 +46,8 @@ jobs:
       - name: Run scraper
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          # Scheduled runs have empty inputs -> SCRAPE_MODE unset -> defaults to 'refresh'.
+          SCRAPE_MODE: ${{ github.event.inputs.mode }}
           SCRAPE_SLUGS: ${{ github.event.inputs.slugs }}
           SCRAPE_LIMIT: ${{ github.event.inputs.limit }}
           SCRAPE_DEBUG: ${{ github.event.inputs.debug }}
