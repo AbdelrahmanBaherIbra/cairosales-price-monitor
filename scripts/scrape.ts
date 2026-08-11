@@ -142,31 +142,42 @@ async function searchAndMatch(
  * Cousin-safe: a page for a different model won't carry the searched code as its
  * identity. Returns that page's parsed offer so the caller needn't re-fetch.
  */
+const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/** Does a product page's MAIN identity (title / h1 / JSON-LD sku|name) carry the exact code? */
+function identityHasCode(html: string, code: string): boolean {
+  const c = norm(code);
+  const title = norm(html.match(/<title>([^<]*)<\/title>/i)?.[1] ?? "");
+  const h1 = norm((html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1] ?? "").replace(/<[^>]+>/g, ""));
+  const inIdentity = extractProductsFromHtml(html).some(
+    (pr) => norm(pr.sku ?? "").includes(c) || norm(pr.name ?? "").includes(c),
+  );
+  return title.includes(c) || h1.includes(c) || inIdentity;
+}
+
 async function verifyOnProductPages(
   ctx: BrowserContext,
   competitor: Competitor,
   code: string,
   searchHtml: string,
 ): Promise<{ url: string; offer: ParsedOffer | null } | null> {
-  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const c = norm(code);
   const candidates = extractProductCandidates(searchHtml, competitor).slice(0, 5);
   for (const url of candidates) {
     const prodHtml = await render(ctx, url);
     if (!prodHtml) continue;
-    const title = norm(prodHtml.match(/<title>([^<]*)<\/title>/i)?.[1] ?? "");
-    const h1 = norm((prodHtml.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1] ?? "").replace(/<[^>]+>/g, ""));
-    const inIdentity = extractProductsFromHtml(prodHtml).some(
-      (pr) => norm(pr.sku ?? "").includes(c) || norm(pr.name ?? "").includes(c),
-    );
-    if (title.includes(c) || h1.includes(c) || inIdentity) {
+    if (identityHasCode(prodHtml, code)) {
       return { url, offer: extractOfferFromHtml(prodHtml) };
     }
   }
   return null;
 }
 
-async function scrapeCompetitor(browser: Browser, competitor: Competitor, products: Product[]) {
+async function scrapeCompetitor(
+  browser: Browser,
+  competitor: Competitor,
+  products: Product[],
+  allCodes: string[],
+) {
   if (!competitor.search_url_template) {
     console.log(`  [${competitor.slug}] no search_url_template, skipping`);
     return;
@@ -202,9 +213,11 @@ async function scrapeCompetitor(browser: Browser, competitor: Competitor, produc
     // GA4 dataLayer (server-rendered) — reliable name+price on Magento sites like
     // 2B. Confirms a match when the JS tiles didn't render, and supplies price.
     const dlPrice = priceFromDataLayer(result.html, p.model_code);
+    let fromDataLayer = false;
     if (!candidate && dlPrice != null) {
       const searchUrl = competitor.search_url_template!.replaceAll("{query}", encodeURIComponent(p.model_code));
       candidate = { url: searchUrl, confidence: 0.85 };
+      fromDataLayer = true;
     }
     if (process.env.SCRAPE_DEBUG && index === 0) {
       const searchUrl = competitor.search_url_template!.replaceAll("{query}", encodeURIComponent(p.model_code));
@@ -212,8 +225,44 @@ async function scrapeCompetitor(browser: Browser, competitor: Competitor, produc
       console.log(`  [${competitor.slug}] candidate: ${candidate?.url ?? "none"} (conf ${candidate?.confidence ?? "-"})`);
     }
     if (!candidate) return;
-    matched++;
 
+    const ownCode = norm(p.model_code);
+    const urlPath = norm(candidate.url.split("?")[0]);
+
+    // Bundle guard: a product URL that also contains a DIFFERENT tracked code is a
+    // multi-product set (e.g. hood+hob+oven), whose price isn't this product's.
+    const foreign = allCodes.find(
+      (c) => c !== ownCode && c.length >= 5 && !ownCode.includes(c) && !c.includes(ownCode) && urlPath.includes(c),
+    );
+    if (foreign) {
+      if (process.env.SCRAPE_DEBUG && index === 0)
+        console.log(`  [${competitor.slug}] BUNDLE skip (${p.model_code}): url also carries ${foreign}`);
+      return;
+    }
+
+    // Trusted = exact code is in the URL, or came from dataLayer (item_name match)
+    // or verify-on-page (already confirmed). Everything else must be confirmed on
+    // the product page, or it's a fuzzy-search cousin (e.g. WGA2540XEG for WGB2440XEG).
+    const trusted = urlPath.includes(ownCode) || fromDataLayer || prefetchedOffer !== undefined;
+    const isSearchFallbackUrl =
+      fromDataLayer || candidate.url.includes("catalogsearch") || candidate.url.includes("/s?q=");
+
+    let offer: ParsedOffer | null;
+    if (prefetchedOffer !== undefined) {
+      offer = prefetchedOffer;
+    } else if (isSearchFallbackUrl) {
+      offer = null;
+    } else {
+      const prodHtml = await render(ctx, candidate.url);
+      if (!trusted && (!prodHtml || !identityHasCode(prodHtml, p.model_code))) {
+        if (process.env.SCRAPE_DEBUG && index === 0)
+          console.log(`  [${competitor.slug}] COUSIN skip (${p.model_code}): exact code not on product page`);
+        return;
+      }
+      offer = prodHtml ? extractOfferFromHtml(prodHtml) : null;
+    }
+
+    matched++;
     const cp = await query<{ id: string }>(
       `insert into competitor_products
          (tracked_product_id, competitor_id, product_url, match_status, match_confidence)
@@ -227,19 +276,6 @@ async function scrapeCompetitor(browser: Browser, competitor: Competitor, produc
       [p.id, competitor.id, candidate.url, candidate.confidence],
     );
 
-    // Reuse the verify-path offer, else render the product page for its price.
-    // Skip the product-page fetch when the URL is just the search page (dataLayer
-    // match) — there's no product JSON-LD to gain there.
-    let offer: ParsedOffer | null;
-    const isSearchFallbackUrl = candidate.url.includes("catalogsearch") || candidate.url.includes("/s?q=");
-    if (prefetchedOffer !== undefined) {
-      offer = prefetchedOffer;
-    } else if (isSearchFallbackUrl) {
-      offer = null;
-    } else {
-      const prodHtml = await render(ctx, candidate.url);
-      offer = prodHtml ? extractOfferFromHtml(prodHtml) : null;
-    }
     // Price: product-page JSON-LD if present, else the dataLayer price.
     const price = offer?.price ?? dlPrice ?? null;
     if (process.env.SCRAPE_DEBUG && index === 0) {
@@ -318,12 +354,18 @@ async function main() {
     [codeFilter && codeFilter.length ? codeFilter : null],
   );
 
+  // ALL active codes (not just the filtered batch) — needed for the bundle guard.
+  const allCodeRows = await query<{ model_code: string }>(
+    `select model_code from tracked_products where is_active`,
+  );
+  const allCodes = allCodeRows.map((r) => norm(r.model_code));
+
   console.log(`Scraping ${competitors.length} competitor(s) x ${products.length} products`);
   const browser = await chromium.launch({ args: ["--no-sandbox"] });
   try {
     for (const c of competitors) {
       console.log(`[${c.slug}] starting…`);
-      await scrapeCompetitor(browser, c, products);
+      await scrapeCompetitor(browser, c, products, allCodes);
     }
   } finally {
     await browser.close();
