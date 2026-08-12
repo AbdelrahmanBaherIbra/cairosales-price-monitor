@@ -14,8 +14,15 @@
  *   SCRAPE_CONCURRENCY optional  parallel pages (default 3)
  *   RENDER_WAIT_MS    optional   extra wait after load for JS (default 2500)
  */
-import { chromium, type Browser, type BrowserContext } from "playwright";
+import { chromium as chromiumExtra } from "playwright-extra";
+import StealthPlugin from "puppeteer-extra-plugin-stealth";
+import type { Browser, BrowserContext } from "playwright";
 import { query, closePool } from "../src/lib/db";
+
+// Stealth: hides the headless-browser fingerprints (navigator.webdriver, etc.)
+// that bot-protection uses to flag automated traffic.
+const chromium = chromiumExtra;
+chromium.use(StealthPlugin());
 import {
   findCandidateInHtml,
   extractProductCandidates,
