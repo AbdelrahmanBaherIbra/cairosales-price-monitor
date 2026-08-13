@@ -51,16 +51,10 @@ a { color: inherit; }
   flex: none;
   width: 46px; height: 46px;
   border-radius: 50%;
+  object-fit: cover;
   background: #fff;
-  color: var(--brand);
-  display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  font-weight: 800; line-height: 0.95;
-  font-size: 10px; letter-spacing: .02em;
-  text-align: center;
-  box-shadow: inset 0 0 0 2px var(--brand);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.85);
 }
-.brandbar .logo span { display: block; }
 .brandbar .brandtext { display: flex; flex-direction: column; }
 .brandbar h1 { font-size: 19px; margin: 0; font-weight: 700; }
 .brandbar .tag { font-size: 12px; opacity: .9; margin-top: 2px; }

@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-/** Cairo Sales branded header bar with the round logo badge. */
+/** Cairo Sales branded header bar with the real logo. */
 export function BrandBar({
   title,
   tag,
@@ -12,11 +12,8 @@ export function BrandBar({
 }) {
   return (
     <header className="brandbar">
-      <div className="logo" aria-label="Cairo Sales Stores">
-        <span>cairo</span>
-        <span>sales</span>
-        <span>stores</span>
-      </div>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img className="logo" src="/logo.jpeg" alt="Cairo Sales Stores" width={46} height={46} />
       <div className="brandtext">
         <h1>{title}</h1>
         {tag ? <div className="tag">{tag}</div> : null}
