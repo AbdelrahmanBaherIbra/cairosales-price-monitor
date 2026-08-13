@@ -40,6 +40,17 @@ import {
 import { mapPool } from "../src/lib/pool";
 import type { Competitor } from "../src/lib/types";
 
+// The stealth plugin fires CDP commands at each new page; when a page/context
+// closes while one is still in flight (common with many parallel contexts) it
+// rejects with a benign "Target ... has been closed". Swallow only that — any
+// other unhandled rejection is a real bug and should still fail the run.
+process.on("unhandledRejection", (err) => {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/target.*(closed|has been closed)|context or browser has been closed/i.test(msg)) return;
+  console.error("Unhandled rejection:", err);
+  process.exit(1);
+});
+
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/124.0 Safari/537.36";
@@ -66,10 +77,14 @@ interface Product {
  */
 async function newCtx(browser: Browser): Promise<BrowserContext> {
   const ctx = await browser.newContext({ userAgent: UA, locale: "en-US" });
-  await ctx.route("**/*", (route) => {
-    const t = route.request().resourceType();
-    if (t === "image" || t === "media" || t === "font") return route.abort();
-    return route.continue();
+  await ctx.route("**/*", async (route) => {
+    try {
+      const t = route.request().resourceType();
+      if (t === "image" || t === "media" || t === "font") await route.abort();
+      else await route.continue();
+    } catch {
+      // Request arrived mid-teardown; the target is gone — nothing to do.
+    }
   });
   return ctx;
 }
