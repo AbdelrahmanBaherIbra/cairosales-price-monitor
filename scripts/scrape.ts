@@ -11,8 +11,10 @@
  *   SUPABASE_DB_URL   required   Postgres connection (transaction pooler)
  *   SCRAPE_SLUGS      optional   comma-separated competitor slugs (default: all active)
  *   SCRAPE_LIMIT      optional   max products per competitor (default: all)
- *   SCRAPE_CONCURRENCY optional  parallel pages (default 3)
- *   RENDER_WAIT_MS    optional   extra wait after load for JS (default 2500)
+ *   SCRAPE_CONCURRENCY optional  parallel pages while matching (default 3)
+ *   REFRESH_CONCURRENCY optional parallel pages for clean sites on refresh (default 6)
+ *   RENDER_WAIT_MS    optional   extra wait after load for JS (default 4000)
+ *   FAST_CAP_MS       optional   max poll for a server-rendered price on refresh (default 3000)
  */
 import { chromium as chromiumExtra } from "playwright-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
@@ -42,6 +44,12 @@ const UA =
   "(KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 const WAIT = Number(process.env.RENDER_WAIT_MS ?? 4000);
 const CONCURRENCY = Number(process.env.SCRAPE_CONCURRENCY ?? 3);
+// Daily refresh only re-reads known URLs, so it can run the clean (non-throttled)
+// sites much wider than matching does.
+const REFRESH_CONC = Number(process.env.REFRESH_CONCURRENCY ?? 6);
+// Fast path: how long to poll for a server-rendered price before falling back to
+// the full JS wait. Sites that ship price in JSON-LD return almost instantly.
+const FAST_CAP = Number(process.env.FAST_CAP_MS ?? 3000);
 
 interface Product {
   id: string;
@@ -49,12 +57,44 @@ interface Product {
   threshold_price: number | null;
 }
 
-async function render(ctx: BrowserContext, url: string): Promise<string | null> {
+/**
+ * A browser context that never downloads images, media or fonts — we only ever
+ * read HTML/JSON-LD, so blocking those bytes cuts page-load time and bandwidth
+ * substantially. The <img> tags (and their src, used by the image-proximity
+ * matcher) stay in the DOM; only the binary fetch is skipped.
+ */
+async function newCtx(browser: Browser): Promise<BrowserContext> {
+  const ctx = await browser.newContext({ userAgent: UA, locale: "en-US" });
+  await ctx.route("**/*", (route) => {
+    const t = route.request().resourceType();
+    if (t === "image" || t === "media" || t === "font") return route.abort();
+    return route.continue();
+  });
+  return ctx;
+}
+
+async function render(
+  ctx: BrowserContext,
+  url: string,
+  opts?: { fast?: boolean },
+): Promise<string | null> {
   const page = await ctx.newPage();
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    // Fast path (daily refresh): the price is often already in the server-
+    // rendered JSON-LD. Poll briefly and return the instant it's there, instead
+    // of always paying the full JS wait. Falls through to the slow path if the
+    // price never appears within FAST_CAP (e.g. JS-rendered sites like Noon).
+    if (opts?.fast) {
+      const start = Date.now();
+      while (Date.now() - start < FAST_CAP) {
+        const html = await page.content();
+        if (extractOfferFromHtml(html)?.price != null) return html;
+        await page.waitForTimeout(300);
+      }
+    }
     // Let client-side search results / prices load, then nudge lazy content.
-    await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 3500 }).catch(() => {});
     await page.waitForTimeout(WAIT);
     // Cloudflare interactive challenge: it auto-clears in a few seconds with a
     // real (stealth) browser — wait it out, up to ~20s, then re-read.
@@ -197,7 +237,7 @@ async function scrapeCompetitor(
     console.log(`  [${competitor.slug}] no search_url_template, skipping`);
     return;
   }
-  const ctx = await browser.newContext({ userAgent: UA, locale: "en-US" });
+  const ctx = await newCtx(browser);
   let matched = 0;
   let priced = 0;
 
@@ -210,7 +250,7 @@ async function scrapeCompetitor(
     if (throttle && index > 0) await new Promise((r) => setTimeout(r, 2500));
     // Fresh browser session per request for throttled sites, so bot-protection
     // can't correlate a run of requests back to one tracked session.
-    const pageCtx = throttle ? await browser.newContext({ userAgent: UA, locale: "en-US" }) : ctx;
+    const pageCtx = throttle ? await newCtx(browser) : ctx;
     try {
     const result = await searchAndMatch(pageCtx, competitor, p.model_code);
     if (!result) {
@@ -385,43 +425,81 @@ async function refreshPrices(browser: Browser, slugsArg?: string[]) {
     [slugsArg && slugsArg.length ? slugsArg : null],
   );
 
-  const bySlug = new Map<string, typeof rows>();
+  type Row = (typeof rows)[number];
+
+  // Re-price one already-matched URL and append a snapshot.
+  const priceOne = async (ctx: BrowserContext, r: Row, fast: boolean) => {
+    const prodHtml = await render(ctx, r.product_url, { fast });
+    const offer = prodHtml ? extractOfferFromHtml(prodHtml) : null;
+    const price = offer?.price ?? null;
+    const below =
+      price != null && r.threshold_price != null ? price < Number(r.threshold_price) : null;
+    await query(
+      `insert into price_snapshots
+         (competitor_product_id, price, currency, in_stock, below_threshold, fetch_status, raw)
+       values ($1,$2,$3,$4,$5,$6,$7)`,
+      [
+        r.cp_id,
+        price,
+        offer?.currency ?? "EGP",
+        offer?.inStock ?? null,
+        below,
+        price != null ? "ok" : "not_found",
+        offer ? JSON.stringify(offer.raw) : null,
+      ],
+    );
+    return price != null;
+  };
+
+  // Split by politeness: clean sites run wide in one shared context; throttled
+  // sites (bot-protected) each get their own context, one page at a time. The
+  // two groups run concurrently, so the run finishes in ~max(group time), not
+  // the sum — Noon's deliberate delay no longer blocks Bosch/Raya/etc.
+  const fastRows: Row[] = [];
+  const throttledBySlug = new Map<string, Row[]>();
   for (const r of rows) {
-    if (!bySlug.has(r.slug)) bySlug.set(r.slug, []);
-    bySlug.get(r.slug)!.push(r);
+    if (r.throttle) {
+      if (!throttledBySlug.has(r.slug)) throttledBySlug.set(r.slug, []);
+      throttledBySlug.get(r.slug)!.push(r);
+    } else {
+      fastRows.push(r);
+    }
   }
 
-  const ctx = await browser.newContext({ userAgent: UA, locale: "en-US" });
-  for (const [slug, list] of bySlug) {
-    const throttle = list[0].throttle;
-    const conc = throttle ? 1 : CONCURRENCY;
-    let priced = 0;
-    await mapPool(list, conc, async (r, i) => {
-      if (throttle && i > 0) await new Promise((res) => setTimeout(res, 2500));
-      const prodHtml = await render(ctx, r.product_url);
-      const offer = prodHtml ? extractOfferFromHtml(prodHtml) : null;
-      const price = offer?.price ?? null;
-      const below =
-        price != null && r.threshold_price != null ? price < Number(r.threshold_price) : null;
-      if (price != null) priced++;
-      await query(
-        `insert into price_snapshots
-           (competitor_product_id, price, currency, in_stock, below_threshold, fetch_status, raw)
-         values ($1,$2,$3,$4,$5,$6,$7)`,
-        [
-          r.cp_id,
-          price,
-          offer?.currency ?? "EGP",
-          offer?.inStock ?? null,
-          below,
-          price != null ? "ok" : "not_found",
-          offer ? JSON.stringify(offer.raw) : null,
-        ],
-      );
-    });
-    console.log(`  [${slug}] refreshed ${list.length}, priced ${priced}`);
+  const jobs: Promise<void>[] = [];
+
+  if (fastRows.length) {
+    jobs.push(
+      (async () => {
+        const ctx = await newCtx(browser);
+        try {
+          const ok = await mapPool(fastRows, REFRESH_CONC, (r) => priceOne(ctx, r, true));
+          console.log(`  [clean] refreshed ${fastRows.length}, priced ${ok.filter(Boolean).length}`);
+        } finally {
+          await ctx.close();
+        }
+      })(),
+    );
   }
-  await ctx.close();
+
+  for (const [slug, list] of throttledBySlug) {
+    jobs.push(
+      (async () => {
+        const ctx = await newCtx(browser);
+        try {
+          const ok = await mapPool(list, 1, async (r, i) => {
+            if (i > 0) await new Promise((res) => setTimeout(res, 2500));
+            return priceOne(ctx, r, false);
+          });
+          console.log(`  [${slug}] refreshed ${list.length}, priced ${ok.filter(Boolean).length}`);
+        } finally {
+          await ctx.close();
+        }
+      })(),
+    );
+  }
+
+  await Promise.all(jobs);
 }
 
 async function main() {
