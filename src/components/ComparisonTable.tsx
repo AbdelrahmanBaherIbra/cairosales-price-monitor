@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { Competitor } from "@/lib/types";
 import type { ProductComparison } from "@/lib/queries";
+import { RetailerLogo } from "@/components/RetailerLogo";
 
 function fmt(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -24,7 +25,12 @@ export function ComparisonTable({
             <th>Threshold</th>
             <th>Rank</th>
             {competitors.map((c) => (
-              <th key={c.slug}>{c.name}</th>
+              <th key={c.slug}>
+                <span className="colhead">
+                  <RetailerLogo name={c.name} websiteUrl={c.website_url} />
+                  {c.name}
+                </span>
+              </th>
             ))}
           </tr>
         </thead>

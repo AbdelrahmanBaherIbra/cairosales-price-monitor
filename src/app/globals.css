@@ -90,6 +90,23 @@ th {
   background: var(--brand); color: #fff; font-weight: 600;
   position: sticky; top: 0; z-index: 1;
 }
+.colhead {
+  display: inline-flex; align-items: center; gap: 7px;
+  justify-content: flex-end;
+}
+.rlogo {
+  flex: none;
+  width: 18px; height: 18px;
+  border-radius: 4px;
+  background: #fff;
+  object-fit: contain;
+  padding: 1px;
+}
+.rlogo-fallback {
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--brand); font-weight: 800; font-size: 11px;
+  padding: 0;
+}
 tbody tr:nth-child(even) td { background: var(--panel-2); }
 td.model, th.model { text-align: left; position: sticky; left: 0; z-index: 1; }
 td.model { background: var(--panel); font-weight: 600; }
