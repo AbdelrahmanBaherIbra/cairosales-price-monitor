@@ -105,3 +105,43 @@ export async function getProductHistory(productId: string): Promise<HistoryPoint
     [productId],
   );
 }
+
+export interface PriceChange {
+  competitor_slug: string;
+  competitor_name: string;
+  website_url: string | null;
+  price: number;
+  changed_at: string;
+}
+
+/**
+ * Per-competitor price *changes* for a product: one entry each time the price
+ * actually moved (the date it changed to that value), newest first. Consecutive
+ * identical prices are collapsed with a window function, so it reads correctly
+ * even for history captured before change-only storage. No-price readings are
+ * excluded.
+ */
+export async function getProductPriceChanges(productId: string): Promise<PriceChange[]> {
+  return query<PriceChange>(
+    `with snaps as (
+       select c.slug as competitor_slug, c.name as competitor_name, c.website_url,
+              s.price, s.captured_at,
+              lag(s.price) over (
+                partition by s.competitor_product_id order by s.captured_at
+              ) as prev_price,
+              row_number() over (
+                partition by s.competitor_product_id order by s.captured_at
+              ) as rn
+       from price_snapshots s
+       join competitor_products cp on cp.id = s.competitor_product_id
+       join competitors c on c.id = cp.competitor_id and c.is_active
+       where cp.tracked_product_id = $1
+     )
+     select competitor_slug, competitor_name, website_url,
+            price, captured_at as changed_at
+     from snaps
+     where price is not null and (rn = 1 or price is distinct from prev_price)
+     order by competitor_name asc, captured_at desc`,
+    [productId],
+  );
+}

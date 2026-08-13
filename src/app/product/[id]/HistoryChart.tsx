@@ -63,10 +63,10 @@ export function HistoryChart({
           {slugs.map((slug, i) => (
             <Line
               key={slug}
-              type="monotone"
+              type="stepAfter"
               dataKey={slug}
               stroke={COLORS[i % COLORS.length]}
-              dot={false}
+              dot={{ r: 2 }}
               connectNulls
             />
           ))}

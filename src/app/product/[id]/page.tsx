@@ -1,6 +1,7 @@
-import { getProductHistory } from "@/lib/queries";
+import { getProductHistory, getProductPriceChanges } from "@/lib/queries";
 import { query } from "@/lib/db";
 import { HistoryChart } from "./HistoryChart";
+import { PriceChanges } from "./PriceChanges";
 import { BrandBar } from "@/components/BrandBar";
 
 function fmt(n: number | null | undefined): string {
@@ -27,7 +28,10 @@ export default async function ProductPage({
     [id],
   );
 
-  const history = await getProductHistory(id);
+  const [history, changes] = await Promise.all([
+    getProductHistory(id),
+    getProductPriceChanges(id),
+  ]);
 
   return (
     <main className="wrap">
@@ -46,6 +50,8 @@ export default async function ProductPage({
           threshold={product?.threshold_price ?? null}
         />
       )}
+
+      <PriceChanges changes={changes} />
     </main>
   );
 }

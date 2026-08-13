@@ -89,6 +89,36 @@ async function newCtx(browser: Browser): Promise<BrowserContext> {
   return ctx;
 }
 
+/**
+ * Append a price snapshot only when the price differs from this mapping's most
+ * recent snapshot — so price_snapshots becomes a change-log, not a daily dump.
+ * `is distinct from` compares NULLs correctly (out-of-stock counts as a change),
+ * and the not-exists arm records the first-ever reading for a new mapping.
+ * Returns true when a row was actually written.
+ */
+async function recordSnapshotIfChanged(
+  cpId: string,
+  price: number | null,
+  currency: string,
+  inStock: boolean | null,
+  below: boolean | null,
+  fetchStatus: string,
+  raw: string | null,
+): Promise<boolean> {
+  const res = await query<{ id: string }>(
+    `insert into price_snapshots
+       (competitor_product_id, price, currency, in_stock, below_threshold, fetch_status, raw)
+     select $1,$2,$3,$4,$5,$6,$7
+     where not exists (select 1 from price_snapshots where competitor_product_id = $1)
+        or (select price from price_snapshots
+            where competitor_product_id = $1
+            order by captured_at desc limit 1) is distinct from $2::numeric
+     returning id`,
+    [cpId, price, currency, inStock, below, fetchStatus, raw],
+  );
+  return res.length > 0;
+}
+
 async function render(
   ctx: BrowserContext,
   url: string,
@@ -361,19 +391,14 @@ async function scrapeCompetitor(
       price != null && p.threshold_price != null ? price < Number(p.threshold_price) : null;
     if (price != null) priced++;
 
-    await query(
-      `insert into price_snapshots
-         (competitor_product_id, price, currency, in_stock, below_threshold, fetch_status, raw)
-       values ($1,$2,$3,$4,$5,$6,$7)`,
-      [
-        cp[0].id,
-        price,
-        offer?.currency ?? "EGP",
-        offer?.inStock ?? null,
-        belowThreshold,
-        price != null ? "ok" : "not_found",
-        offer ? JSON.stringify(offer.raw) : null,
-      ],
+    await recordSnapshotIfChanged(
+      cp[0].id,
+      price,
+      offer?.currency ?? "EGP",
+      offer?.inStock ?? null,
+      belowThreshold,
+      price != null ? "ok" : "not_found",
+      offer ? JSON.stringify(offer.raw) : null,
     );
     } finally {
       if (throttle) await pageCtx.close();
@@ -445,28 +470,23 @@ async function refreshPrices(browser: Browser, slugsArg?: string[], excludeArg?:
 
   type Row = (typeof rows)[number];
 
-  // Re-price one already-matched URL and append a snapshot.
+  // Re-price one already-matched URL and record it only if the price moved.
   const priceOne = async (ctx: BrowserContext, r: Row, fast: boolean) => {
     const prodHtml = await render(ctx, r.product_url, { fast });
     const offer = prodHtml ? extractOfferFromHtml(prodHtml) : null;
     const price = offer?.price ?? null;
     const below =
       price != null && r.threshold_price != null ? price < Number(r.threshold_price) : null;
-    await query(
-      `insert into price_snapshots
-         (competitor_product_id, price, currency, in_stock, below_threshold, fetch_status, raw)
-       values ($1,$2,$3,$4,$5,$6,$7)`,
-      [
-        r.cp_id,
-        price,
-        offer?.currency ?? "EGP",
-        offer?.inStock ?? null,
-        below,
-        price != null ? "ok" : "not_found",
-        offer ? JSON.stringify(offer.raw) : null,
-      ],
+    const changed = await recordSnapshotIfChanged(
+      r.cp_id,
+      price,
+      offer?.currency ?? "EGP",
+      offer?.inStock ?? null,
+      below,
+      price != null ? "ok" : "not_found",
+      offer ? JSON.stringify(offer.raw) : null,
     );
-    return price != null;
+    return { priced: price != null, changed };
   };
 
   // Split by politeness: clean sites run wide in one shared context; throttled
@@ -492,7 +512,9 @@ async function refreshPrices(browser: Browser, slugsArg?: string[], excludeArg?:
         const ctx = await newCtx(browser);
         try {
           const ok = await mapPool(fastRows, REFRESH_CONC, (r) => priceOne(ctx, r, true));
-          console.log(`  [clean] refreshed ${fastRows.length}, priced ${ok.filter(Boolean).length}`);
+          const priced = ok.filter((x) => x?.priced).length;
+          const changed = ok.filter((x) => x?.changed).length;
+          console.log(`  [clean] refreshed ${fastRows.length}, priced ${priced}, changed ${changed}`);
         } finally {
           await ctx.close();
         }
@@ -509,7 +531,9 @@ async function refreshPrices(browser: Browser, slugsArg?: string[], excludeArg?:
             if (i > 0) await new Promise((res) => setTimeout(res, 2500));
             return priceOne(ctx, r, false);
           });
-          console.log(`  [${slug}] refreshed ${list.length}, priced ${ok.filter(Boolean).length}`);
+          const priced = ok.filter((x) => x?.priced).length;
+          const changed = ok.filter((x) => x?.changed).length;
+          console.log(`  [${slug}] refreshed ${list.length}, priced ${priced}, changed ${changed}`);
         } finally {
           await ctx.close();
         }
