@@ -88,7 +88,7 @@ export function findCandidateInHtml(
   // that produced false matches (e.g. code mentioned in a related-items strip).
   const base = competitor.website_url ?? "";
   const candidates = extractAllLinks(html, base)
-    .filter((l) => !isSearchUrl(l) && !isAsset(l)) // skip image/asset URLs
+    .filter((l) => !isSearchUrl(l) && !isAsset(l) && !isSupportPage(l)) // skip assets & support pages
     .filter((l) => normalise(l).includes(code));
   if (candidates.length) {
     // Product images often embed the code too, but live on a media/cdn host —
@@ -123,7 +123,7 @@ export function extractProductCandidates(html: string, competitor: Competitor): 
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {
     const abs = toAbsolute(m[1], base);
-    if (!abs || isSearchUrl(abs) || isAsset(abs) || !isProductPath(abs)) continue;
+    if (!abs || isSearchUrl(abs) || isAsset(abs) || isSupportPage(abs) || !isProductPath(abs)) continue;
     if (!seen.has(abs)) {
       seen.add(abs);
       out.push(abs);
@@ -154,7 +154,7 @@ function findByProximity(html: string, modelCode: string, base: string): string 
   let m: RegExpExecArray | null;
   while ((m = hrefRe.exec(html)) !== null) {
     const abs = toAbsolute(m[1], base);
-    if (!abs || isSearchUrl(abs) || isAsset(abs) || !isProductPath(abs)) continue;
+    if (!abs || isSearchUrl(abs) || isAsset(abs) || isSupportPage(abs) || !isProductPath(abs)) continue;
     let dist = Infinity;
     for (const cp of anchors) dist = Math.min(dist, Math.abs(cp - m.index));
     if (!best || dist < best.dist) best = { url: abs, dist };
@@ -178,6 +178,16 @@ function isAssetHost(url: string): boolean {
 
 function isProductPath(url: string): boolean {
   return /\/(p|product|products|item|dp)\//i.test(url) || /-\d{3,}(\?|#|$)/.test(url);
+}
+
+/**
+ * Manufacturer support / manuals / service pages. These are real pages that
+ * mention the model code and sit under /product/, so they look like product
+ * pages — but they never carry a price (e.g. Bosch's /supportdetail/product/…).
+ * Excluding them steers matches to the actual shop page.
+ */
+function isSupportPage(url: string): boolean {
+  return /\/(supportdetail|support|service|manuals?|installationguide)(\/|\?|#|-|$)/i.test(url);
 }
 
 /** True for search / listing URLs, which are never valid product matches. */

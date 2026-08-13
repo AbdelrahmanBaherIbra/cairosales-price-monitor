@@ -164,6 +164,7 @@ async function searchAndMatch(
           const isProd = (h: string | null) =>
             !!h &&
             /\/(p|product|products|item|dp)\//i.test(h) &&
+            !/\/(supportdetail|support|service|manuals?)(\/|\?|#|-|$)/i.test(h) &&
             !/\.(png|jpe?g|webp|gif|svg|avif)(\?|#|$)/i.test(h);
           const anchors = (Array.from(document.querySelectorAll("a[href]")) as HTMLAnchorElement[])
             .filter((a) => isProd(a.getAttribute("href")));
