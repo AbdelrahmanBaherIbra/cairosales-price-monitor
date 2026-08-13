@@ -1,0 +1,40 @@
+name: Daily price scrape (Noon)
+
+# Noon is bot-protected and scraped politely (one page at a time), so it is the
+# slowest competitor. Isolating it here means it runs on its own GitHub runner
+# in parallel with the main scrape, and a Noon block/timeout never fails the
+# rest of the pilot.
+on:
+  schedule:
+    - cron: "0 5 * * *" # 05:00 UTC = 07:00 Cairo, same as the main scrape
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "refresh (price-only, daily) | match (find product URLs)"
+        required: false
+        default: "refresh"
+
+jobs:
+  scrape-noon:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run scraper (Noon only)
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          # Scheduled runs have empty inputs -> SCRAPE_MODE unset -> defaults to 'refresh'.
+          SCRAPE_MODE: ${{ github.event.inputs.mode }}
+          SCRAPE_SLUGS: noon
+        run: npm run scrape

@@ -1,5 +1,7 @@
 name: Daily price scrape
 
+# Clean, fast competitors. Noon (bot-protected + throttled) runs on its own
+# schedule in scrape-noon.yml so it can't slow down or fail this job.
 on:
   schedule:
     - cron: "0 5 * * *" # 05:00 UTC = 07:00 Cairo
@@ -13,6 +15,10 @@ on:
         description: "Comma-separated competitor slugs (blank = all)"
         required: false
         default: "raya"
+      exclude:
+        description: "Slugs to skip (blank = noon, which has its own workflow)"
+        required: false
+        default: ""
       limit:
         description: "Max products per competitor (blank = all)"
         required: false
@@ -49,6 +55,8 @@ jobs:
           # Scheduled runs have empty inputs -> SCRAPE_MODE unset -> defaults to 'refresh'.
           SCRAPE_MODE: ${{ github.event.inputs.mode }}
           SCRAPE_SLUGS: ${{ github.event.inputs.slugs }}
+          # Blank exclude (incl. scheduled runs) -> skip noon; it runs in scrape-noon.yml.
+          SCRAPE_EXCLUDE: ${{ github.event.inputs.exclude || 'noon' }}
           SCRAPE_LIMIT: ${{ github.event.inputs.limit }}
           SCRAPE_DEBUG: ${{ github.event.inputs.debug }}
           SCRAPE_CODE: ${{ github.event.inputs.code }}
