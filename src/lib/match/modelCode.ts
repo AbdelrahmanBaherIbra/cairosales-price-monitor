@@ -67,9 +67,11 @@ export function findCandidateInHtml(
   const code = normalise(modelCode);
 
   // 1. JSON-LD products — but never accept a URL that is itself a search page
-  // (some sites emit a placeholder Product/Offer whose url is the search URL).
+  // (some sites emit a placeholder Product/Offer whose url is the search URL),
+  // nor a manufacturer support page (Bosch's JSON-LD points at /supportdetail/,
+  // which has no price — skip it so the code-in-URL step can find the shop page).
   const products = extractProductsFromHtml(html).filter(
-    (p) => p.url && !isSearchUrl(p.url),
+    (p) => p.url && !isSearchUrl(p.url) && !isSupportPage(p.url),
   );
   for (const p of products) {
     const skuHit = p.sku && normalise(p.sku).includes(code);
