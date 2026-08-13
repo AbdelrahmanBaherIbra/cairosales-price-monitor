@@ -56,6 +56,14 @@ async function render(ctx: BrowserContext, url: string): Promise<string | null> 
     // Let client-side search results / prices load, then nudge lazy content.
     await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
     await page.waitForTimeout(WAIT);
+    // Cloudflare interactive challenge: it auto-clears in a few seconds with a
+    // real (stealth) browser — wait it out, up to ~20s, then re-read.
+    for (let i = 0; i < 4; i++) {
+      const html = await page.content();
+      if (!/just a moment|__cf_chl|cf-challenge|cf_chl_opt|checking your browser/i.test(html)) break;
+      await page.waitForTimeout(5000);
+      await page.waitForLoadState("networkidle", { timeout: 6000 }).catch(() => {});
+    }
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
     await page.waitForTimeout(1000);
     return await page.content();
