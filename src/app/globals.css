@@ -107,8 +107,10 @@ tr:hover td { background: var(--brand-tint); }
 tr:hover td.model { background: var(--brand-tint); }
 
 .our { font-weight: 700; }
-.cheaper { color: var(--green); background: var(--green-bg); font-weight: 600; }  /* competitor cheaper than us */
-.pricier { color: var(--red); background: var(--red-bg); font-weight: 600; }      /* competitor pricier than us */
+/* competitor CHEAPER than us = they undercut us = alarm (red) */
+.cheaper { color: var(--red); background: var(--red-bg); font-weight: 600; }
+/* competitor PRICIER than us = we win on price (green) */
+.pricier { color: var(--green); background: var(--green-bg); font-weight: 600; }
 .map-flag { color: var(--amber); background: var(--amber-bg); font-weight: 600; } /* below Bosch threshold */
 .muted { color: var(--muted); }
 .pill {

@@ -40,8 +40,8 @@ export default async function DashboardPage() {
       <ComparisonTable products={products} competitors={competitors} />
 
       <div className="legend">
-        <span><span className="dot" style={{ background: "var(--green)" }} />competitor cheaper than us</span>
-        <span><span className="dot" style={{ background: "var(--red)" }} />competitor pricier than us</span>
+        <span><span className="dot" style={{ background: "var(--red)" }} />competitor cheaper than us (undercutting)</span>
+        <span><span className="dot" style={{ background: "var(--green)" }} />competitor pricier than us (we win)</span>
         <span><span className="dot" style={{ background: "var(--amber)" }} />below Bosch threshold (MAP)</span>
       </div>
     </main>
