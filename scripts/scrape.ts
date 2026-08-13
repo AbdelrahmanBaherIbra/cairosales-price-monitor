@@ -200,7 +200,11 @@ async function scrapeCompetitor(
 
   await mapPool(products, conc, async (p, index) => {
     if (throttle && index > 0) await new Promise((r) => setTimeout(r, 2500));
-    const result = await searchAndMatch(ctx, competitor, p.model_code);
+    // Fresh browser session per request for throttled sites, so bot-protection
+    // can't correlate a run of requests back to one tracked session.
+    const pageCtx = throttle ? await browser.newContext({ userAgent: UA, locale: "en-US" }) : ctx;
+    try {
+    const result = await searchAndMatch(pageCtx, competitor, p.model_code);
     if (!result) {
       if (index === 0) console.log(`  [${competitor.slug}] DEBUG search render failed`);
       return;
@@ -211,7 +215,7 @@ async function scrapeCompetitor(
     // whose title/JSON-LD carries the EXACT code. Reuses that page's price.
     let prefetchedOffer: ParsedOffer | null | undefined;
     if (!candidate) {
-      const verified = await verifyOnProductPages(ctx, competitor, p.model_code, result.html);
+      const verified = await verifyOnProductPages(pageCtx, competitor, p.model_code, result.html);
       if (verified) {
         candidate = { url: verified.url, confidence: 0.8 };
         prefetchedOffer = verified.offer;
@@ -260,7 +264,7 @@ async function scrapeCompetitor(
     } else if (isSearchFallbackUrl) {
       offer = null;
     } else {
-      const prodHtml = await render(ctx, candidate.url);
+      const prodHtml = await render(pageCtx, candidate.url);
       if (!trusted && (!prodHtml || !identityHasCode(prodHtml, p.model_code))) {
         if (process.env.SCRAPE_DEBUG && index === 0)
           console.log(`  [${competitor.slug}] COUSIN skip (${p.model_code}): exact code not on product page`);
@@ -306,6 +310,9 @@ async function scrapeCompetitor(
         offer ? JSON.stringify(offer.raw) : null,
       ],
     );
+    } finally {
+      if (throttle) await pageCtx.close();
+    }
   });
 
   await ctx.close();
