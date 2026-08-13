@@ -14,7 +14,7 @@ on:
       slugs:
         description: "Comma-separated competitor slugs (blank = all)"
         required: false
-        default: "raya"
+        default: ""
       exclude:
         description: "Slugs to skip (blank = noon, which has its own workflow)"
         required: false
