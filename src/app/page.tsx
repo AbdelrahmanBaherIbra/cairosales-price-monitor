@@ -1,5 +1,6 @@
 import { getComparisonMatrix, getCompetitors } from "@/lib/queries";
 import { ComparisonTable } from "@/components/ComparisonTable";
+import { BrandBar } from "@/components/BrandBar";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -23,16 +24,16 @@ export default async function DashboardPage() {
 
   return (
     <main className="wrap">
-      <header className="top">
-        <h1>Competitor Price Monitor</h1>
-        <span className="muted">Bosch pilot · {products.length} products · {competitors.length} competitors</span>
-      </header>
+      <BrandBar
+        title="Competitor Price Monitor"
+        tag={`Bosch pilot · ${products.length} products · ${competitors.length} competitors`}
+      />
       <p className="sub">Prices refresh once daily. Click a model for its price history.</p>
 
       <section className="cards">
         <Card k="Products" v={String(products.length)} />
         <Card k="Prices captured" v={`${priced} / ${totalCells}`} />
-        <Card k="We are cheapest" v={`${weAreCheapest}`} />
+        <Card k="We are cheapest" v={`${weAreCheapest}`} accent />
         <Card k="Below Bosch min (MAP)" v={String(mapViolations)} />
       </section>
 
@@ -47,9 +48,9 @@ export default async function DashboardPage() {
   );
 }
 
-function Card({ k, v }: { k: string; v: string }) {
+function Card({ k, v, accent }: { k: string; v: string; accent?: boolean }) {
   return (
-    <div className="card">
+    <div className={accent ? "card accent" : "card"}>
       <div className="k">{k}</div>
       <div className="v">{v}</div>
     </div>

@@ -14,9 +14,9 @@ import {
 import type { HistoryPoint } from "@/lib/queries";
 
 const COLORS = [
-  "#4f9cff", "#2ea043", "#f85149", "#d29922", "#a371f7",
-  "#39c5cf", "#db61a2", "#e3b341", "#7ee787", "#ff7b72",
-  "#79c0ff", "#ffa657", "#d2a8ff",
+  "#1f6feb", "#167a3a", "#d1202e", "#b7791f", "#8250df",
+  "#0e8a94", "#bf3989", "#9a6700", "#2da44e", "#cf222e",
+  "#0969da", "#bc4c00", "#6639ba",
 ];
 
 export function HistoryChart({
@@ -46,19 +46,19 @@ export function HistoryChart({
     <div style={{ width: "100%", height: 460, marginTop: 12 }}>
       <ResponsiveContainer>
         <LineChart data={data} margin={{ top: 10, right: 30, left: 10, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#263042" />
-          <XAxis dataKey="date" stroke="#8b97a7" />
-          <YAxis stroke="#8b97a7" tickFormatter={(v) => new Intl.NumberFormat("en-EG").format(v)} />
+          <CartesianGrid strokeDasharray="3 3" stroke="#e3e6ea" />
+          <XAxis dataKey="date" stroke="#6b7480" />
+          <YAxis stroke="#6b7480" tickFormatter={(v) => new Intl.NumberFormat("en-EG").format(v)} />
           <Tooltip
-            contentStyle={{ background: "#141922", border: "1px solid #263042" }}
+            contentStyle={{ background: "#ffffff", border: "1px solid #e3e6ea", borderRadius: 8 }}
             formatter={(v: number, key: string) => [v, names[key] ?? key]}
           />
           <Legend formatter={(key) => names[key] ?? key} />
           {ourPrice != null && (
-            <ReferenceLine y={ourPrice} stroke="#e6edf3" strokeDasharray="6 3" label="Us" />
+            <ReferenceLine y={ourPrice} stroke="#1b1f24" strokeDasharray="6 3" label="Us" />
           )}
           {threshold != null && (
-            <ReferenceLine y={threshold} stroke="#d29922" strokeDasharray="2 4" label="Bosch min" />
+            <ReferenceLine y={threshold} stroke="#b7791f" strokeDasharray="2 4" label="Bosch min" />
           )}
           {slugs.map((slug, i) => (
             <Line

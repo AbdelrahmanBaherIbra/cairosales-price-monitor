@@ -1,4 +1,13 @@
-import { Pool } from "pg";
+import { Pool, types } from "pg";
+
+/**
+ * Parse Postgres `numeric`/`decimal` (type OID 1700) as a JS number instead of
+ * the driver's default string. Prices are stored as numeric, and leaving them
+ * as strings makes every `price < our_price` comparison lexicographic
+ * ("11969" < "9499" is true because '1' < '9'), which mis-colours cells and
+ * corrupts the rank / cheapest calculations. Numbers here fix all of it.
+ */
+types.setTypeParser(1700, (val) => (val === null ? null : Number(val)));
 
 /**
  * Server-only Postgres pool for the Cairo Sales database.
