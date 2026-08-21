@@ -11,6 +11,7 @@
  *   SUPABASE_DB_URL   required   Postgres connection (transaction pooler)
  *   SCRAPE_SLUGS      optional   comma-separated competitor slugs (default: all active)
  *   SCRAPE_EXCLUDE    optional   comma-separated slugs to skip (e.g. noon runs in its own workflow)
+ *   SCRAPE_BRAND      optional   match mode only: limit to one brand's products (brand-by-brand rollout)
  *   SCRAPE_LIMIT      optional   max products per competitor (default: all)
  *   SCRAPE_CONCURRENCY optional  parallel pages while matching (default 3)
  *   REFRESH_CONCURRENCY optional parallel pages for clean sites on refresh (default 6)
@@ -572,20 +573,28 @@ async function main() {
     [slugsArg && slugsArg.length ? slugsArg : null, excludeArg && excludeArg.length ? excludeArg : null],
   );
   const codeFilter = process.env.SCRAPE_CODE?.split(",").map((s) => s.trim()).filter(Boolean);
+  const brandArg = process.env.SCRAPE_BRAND?.trim() || null; // roll out brand by brand
   const products = await query<Product>(
     `select id, model_code, threshold_price from tracked_products
      where is_active and ($1::text[] is null or model_code = any($1))
+       and ($2::text is null or brand = $2)
      order by model_code ${limit ? "limit " + limit : ""}`,
-    [codeFilter && codeFilter.length ? codeFilter : null],
+    [codeFilter && codeFilter.length ? codeFilter : null, brandArg],
   );
 
-  // ALL active codes (not just the filtered batch) — needed for the bundle guard.
+  // Codes for the bundle guard: scope to the same brand being matched — a URL
+  // carrying a DIFFERENT brand's code isn't a bundle, and matching all 3k+ codes
+  // would cause false bundle-skips on coincidental substrings.
   const allCodeRows = await query<{ model_code: string }>(
-    `select model_code from tracked_products where is_active`,
+    `select model_code from tracked_products where is_active and ($1::text is null or brand = $1)`,
+    [brandArg],
   );
   const allCodes = allCodeRows.map((r) => norm(r.model_code));
 
-  console.log(`Mode: match — ${competitors.length} competitor(s) x ${products.length} products`);
+  console.log(
+    `Mode: match — ${competitors.length} competitor(s) x ${products.length} products` +
+      (brandArg ? ` (brand: ${brandArg})` : ""),
+  );
   const browser = await chromium.launch({ args: ["--no-sandbox"] });
   try {
     for (const c of competitors) {

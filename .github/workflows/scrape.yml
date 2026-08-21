@@ -19,6 +19,10 @@ on:
         description: "Slugs to skip (blank = noon, which has its own workflow)"
         required: false
         default: ""
+      brand:
+        description: "Match mode only: limit to one brand (brand-by-brand rollout)"
+        required: false
+        default: ""
       limit:
         description: "Max products per competitor (blank = all)"
         required: false
@@ -57,6 +61,7 @@ jobs:
           SCRAPE_SLUGS: ${{ github.event.inputs.slugs }}
           # Blank exclude (incl. scheduled runs) -> skip noon; it runs in scrape-noon.yml.
           SCRAPE_EXCLUDE: ${{ github.event.inputs.exclude || 'noon' }}
+          SCRAPE_BRAND: ${{ github.event.inputs.brand }}
           SCRAPE_LIMIT: ${{ github.event.inputs.limit }}
           SCRAPE_DEBUG: ${{ github.event.inputs.debug }}
           SCRAPE_CODE: ${{ github.event.inputs.code }}
