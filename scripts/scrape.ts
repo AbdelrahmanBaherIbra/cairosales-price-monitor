@@ -32,6 +32,7 @@ import {
   extractProductCandidates,
   type MatchCandidate,
 } from "../src/lib/match/modelCode";
+import { codeKeys, matchesAnyKey } from "../src/lib/match/codeKeys";
 import {
   extractOfferFromHtml,
   extractProductsFromHtml,
@@ -189,9 +190,12 @@ async function searchAndMatch(
     let candidate = findCandidateInHtml(html, code, competitor);
     if (!candidate) {
       const url = await page
-        .evaluate((codeArg: string) => {
+        .evaluate((keys: string[]) => {
           const norm = (s: string | null) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-          const c = norm(codeArg);
+          const hasCode = (s: string | null) => {
+            const h = norm(s);
+            return keys.some((k) => h.includes(k));
+          };
           const isProd = (h: string | null) =>
             !!h &&
             /\/(p|product|products|item|dp)\//i.test(h) &&
@@ -200,18 +204,18 @@ async function searchAndMatch(
           const anchors = (Array.from(document.querySelectorAll("a[href]")) as HTMLAnchorElement[])
             .filter((a) => isProd(a.getAttribute("href")));
           // The right product card is the one whose OWN content references the
-          // exact code (e.g. its product-image URL embeds the SKU). This scopes
+          // code (e.g. its product-image URL embeds the SKU). This scopes
           // per-card, so a cousin model's card is never picked.
           for (const a of anchors) {
-            if (norm(a.outerHTML).includes(c)) return a.href;
+            if (hasCode(a.outerHTML)) return a.href;
           }
           // Some cards keep the image just outside the link — widen to the card.
           for (const a of anchors) {
             const card = a.closest("article, li, [class*='card'], [class*='product']") ?? a.parentElement;
-            if (card && norm(card.outerHTML).includes(c)) return a.href;
+            if (card && hasCode(card.outerHTML)) return a.href;
           }
           return null;
-        }, code)
+        }, codeKeys(code))
         .catch(() => null);
       if (url) candidate = { url, confidence: 0.8 };
     }
@@ -247,15 +251,15 @@ async function searchAndMatch(
  */
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
-/** Does a product page's MAIN identity (title / h1 / JSON-LD sku|name) carry the exact code? */
+/** Does a product page's MAIN identity (title / h1 / JSON-LD sku|name) carry the code? */
 function identityHasCode(html: string, code: string): boolean {
-  const c = norm(code);
-  const title = norm(html.match(/<title>([^<]*)<\/title>/i)?.[1] ?? "");
-  const h1 = norm((html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1] ?? "").replace(/<[^>]+>/g, ""));
-  const inIdentity = extractProductsFromHtml(html).some(
-    (pr) => norm(pr.sku ?? "").includes(c) || norm(pr.name ?? "").includes(c),
+  const keys = codeKeys(code);
+  const title = html.match(/<title>([^<]*)<\/title>/i)?.[1] ?? "";
+  const h1 = (html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1] ?? "").replace(/<[^>]+>/g, "");
+  if (matchesAnyKey(title, keys) || matchesAnyKey(h1, keys)) return true;
+  return extractProductsFromHtml(html).some(
+    (pr) => matchesAnyKey(pr.sku ?? "", keys) || matchesAnyKey(pr.name ?? "", keys),
   );
-  return title.includes(c) || h1.includes(c) || inIdentity;
 }
 
 async function verifyOnProductPages(

@@ -1,5 +1,6 @@
 import type { Competitor } from "@/lib/types";
 import { extractProductsFromHtml } from "@/lib/fetchers/html";
+import { codeKeys, matchesAnyKey } from "@/lib/match/codeKeys";
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
@@ -64,7 +65,7 @@ export function findCandidateInHtml(
   modelCode: string,
   competitor: Competitor,
 ): MatchCandidate | null {
-  const code = normalise(modelCode);
+  const keys = codeKeys(modelCode);
 
   // 1. JSON-LD products — but never accept a URL that is itself a search page
   // (some sites emit a placeholder Product/Offer whose url is the search URL),
@@ -74,13 +75,13 @@ export function findCandidateInHtml(
     (p) => p.url && !isSearchUrl(p.url) && !isSupportPage(p.url),
   );
   for (const p of products) {
-    const skuHit = p.sku && normalise(p.sku).includes(code);
-    const mpnHit = p.mpn && normalise(p.mpn).includes(code);
+    const skuHit = p.sku && matchesAnyKey(p.sku, keys);
+    const mpnHit = p.mpn && matchesAnyKey(p.mpn, keys);
     if ((skuHit || mpnHit) && p.url) return { url: absolute(p.url, competitor), confidence: 0.97 };
   }
   for (const p of products) {
-    const nameHit = p.name && normalise(p.name).includes(code);
-    const urlHit = p.url && normalise(p.url).includes(code);
+    const nameHit = p.name && matchesAnyKey(p.name, keys);
+    const urlHit = p.url && matchesAnyKey(p.url, keys);
     if ((nameHit || urlHit) && p.url) return { url: absolute(p.url, competitor), confidence: 0.85 };
   }
 
@@ -91,7 +92,7 @@ export function findCandidateInHtml(
   const base = competitor.website_url ?? "";
   const candidates = extractAllLinks(html, base)
     .filter((l) => !isSearchUrl(l) && !isAsset(l) && !isSupportPage(l)) // skip assets & support pages
-    .filter((l) => normalise(l).includes(code));
+    .filter((l) => matchesAnyKey(l, keys));
   if (candidates.length) {
     // Product images often embed the code too, but live on a media/cdn host —
     // prefer a real product-path link on the main site.

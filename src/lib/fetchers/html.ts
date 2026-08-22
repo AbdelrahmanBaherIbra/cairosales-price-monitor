@@ -1,4 +1,5 @@
 /** Shared schema.org JSON-LD extraction, used by both the direct and API fetchers. */
+import { codeKeys, matchesAnyKey } from "@/lib/match/codeKeys";
 
 export interface ParsedOffer {
   price: number | null;
@@ -134,13 +135,12 @@ function parseOffers(offers: unknown): ParsedOffer | null {
  * when the product page has no JSON-LD and the visual tiles load via JS.
  */
 export function priceFromDataLayer(html: string, modelCode: string): number | null {
-  const needle = modelCode.toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (needle.length < 4) return null;
+  const keys = codeKeys(modelCode);
+  if (keys[0].length < 4) return null;
   const re = /"item_name"\s*:\s*"([^"]+)"[\s\S]{0,400}?"price"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)"?/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {
-    const name = m[1].toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (name.includes(needle)) {
+    if (matchesAnyKey(m[1], keys)) {
       const p = parseFloat(m[2]);
       if (Number.isFinite(p) && p > 0) return p;
     }
