@@ -264,9 +264,13 @@ async function verifyOnProductPages(
   code: string,
   searchHtml: string,
 ): Promise<{ url: string; offer: ParsedOffer | null } | null> {
-  const candidates = extractProductCandidates(searchHtml, competitor).slice(0, 5);
+  // Cap at 3 candidates and use the fast render — this fallback fires for every
+  // product a retailer doesn't carry, so on low-coverage brands it dominates the
+  // run time. The identity (code in title/JSON-LD) is in the initial HTML, so the
+  // fast early-exit render is enough to confirm or reject.
+  const candidates = extractProductCandidates(searchHtml, competitor).slice(0, 3);
   for (const url of candidates) {
-    const prodHtml = await render(ctx, url);
+    const prodHtml = await render(ctx, url, { fast: true });
     if (!prodHtml) continue;
     if (identityHasCode(prodHtml, code)) {
       return { url, offer: extractOfferFromHtml(prodHtml) };

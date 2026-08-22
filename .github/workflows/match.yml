@@ -30,7 +30,7 @@ jobs:
   match:
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       max-parallel: 6
