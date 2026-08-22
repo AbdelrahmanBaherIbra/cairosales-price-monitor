@@ -1,0 +1,54 @@
+name: Match (sharded by competitor)
+
+# Seeds product URLs for a brand. Runs one job PER competitor in parallel, so a
+# whole brand across all retailers finishes inside the per-job time limit
+# instead of hitting the 60-min wall a single sequential run would.
+on:
+  workflow_dispatch:
+    inputs:
+      brand:
+        description: "Brand to match (blank = all tracked products)"
+        required: false
+        default: ""
+      slugs:
+        description: "Comma-separated competitor slugs (one parallel job each)"
+        required: true
+        default: "raya,btech,gaballah,abdulaziz,2b,carrefour,elaraby"
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        # Turn "raya,btech,..." into a JSON array the matrix can fan out over.
+        run: |
+          json=$(echo '${{ github.event.inputs.slugs }}' | tr ',' '\n' | sed '/^\s*$/d' | jq -R . | jq -sc .)
+          echo "matrix=$json" >> "$GITHUB_OUTPUT"
+
+  match:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        slug: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Match ${{ matrix.slug }}
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SCRAPE_MODE: match
+          SCRAPE_SLUGS: ${{ matrix.slug }}
+          SCRAPE_BRAND: ${{ github.event.inputs.brand }}
+        run: npm run scrape
