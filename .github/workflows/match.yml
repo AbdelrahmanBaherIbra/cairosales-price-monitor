@@ -30,7 +30,11 @@ jobs:
   match:
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Throttled sites (2B, Carrefour) scrape one product at a time with a delay,
+    # so a large catalog (e.g. LG's 289) can run well past an hour. Public repo =
+    # unlimited free minutes, so give shards ample runway to finish instead of
+    # timing out mid-scan and leaving partial coverage.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       max-parallel: 6
