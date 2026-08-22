@@ -77,6 +77,38 @@ header.top h1 { font-size: 20px; margin: 0; }
 .card.accent { border-color: var(--brand); }
 .card.accent .v { color: var(--brand); }
 
+/* Filter bar */
+.filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 18px; }
+.filters select, .filters input {
+  font: inherit; color: var(--text); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 9px; padding: 8px 11px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+.filters input[type="search"] { min-width: 220px; flex: 1 1 220px; max-width: 340px; }
+.filters select:focus, .filters input:focus { outline: 2px solid var(--brand); outline-offset: 1px; border-color: var(--brand); }
+.filters button {
+  font: inherit; font-weight: 600; color: #fff; background: var(--brand);
+  border: none; border-radius: 9px; padding: 8px 18px; cursor: pointer;
+}
+.filters button:hover { background: var(--brand-dark); }
+.filters .clear { color: var(--muted); text-decoration: none; font-size: 13px; padding: 8px 4px; }
+.filters .clear:hover { color: var(--brand); text-decoration: underline; }
+
+.brand-tag {
+  display: block; font-size: 11px; color: var(--muted);
+  font-weight: 500; margin-top: 1px;
+}
+
+/* Pagination */
+.pager {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 10px; margin: 14px 2px 0; font-size: 13px;
+}
+.pager-controls { display: inline-flex; align-items: center; gap: 14px; }
+.pager-controls a { color: var(--brand); text-decoration: none; font-weight: 600; }
+.pager-controls a:hover { text-decoration: underline; }
+.pager-controls .disabled { color: var(--muted); font-weight: 600; }
+
 .table-scroll {
   overflow-x: auto;
   border: 1px solid var(--border);

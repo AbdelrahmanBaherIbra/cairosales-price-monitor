@@ -1,48 +1,133 @@
-import { getComparisonMatrix, getCompetitors } from "@/lib/queries";
+import Link from "next/link";
+import { getDashboard, getBrandsAndCategories, getCompetitors } from "@/lib/queries";
 import { ComparisonTable } from "@/components/ComparisonTable";
 import { BrandBar } from "@/components/BrandBar";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export default async function DashboardPage() {
-  const [products, competitors] = await Promise.all([
-    getComparisonMatrix(),
+const PAGE_SIZE = 50;
+
+type SP = Record<string, string | string[] | undefined>;
+function one(v: string | string[] | undefined): string | null {
+  const s = Array.isArray(v) ? v[0] : v;
+  return s && s.trim() ? s.trim() : null;
+}
+
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<SP>;
+}) {
+  const sp = await searchParams;
+  const brand = one(sp.brand);
+  const category = one(sp.category);
+  const q = one(sp.q);
+  const page = Math.max(1, Number(one(sp.page) ?? "1") || 1);
+
+  const [data, opts, competitors] = await Promise.all([
+    getDashboard({ brand, category, q, page, pageSize: PAGE_SIZE }),
+    getBrandsAndCategories(),
     getCompetitors(),
   ]);
 
-  const totalCells = products.length * competitors.length;
-  const priced = products.reduce(
-    (acc, p) => acc + Object.values(p.cells).filter((c) => c.competitor_price != null).length,
-    0,
-  );
-  const mapViolations = products.reduce(
-    (acc, p) => acc + Object.values(p.cells).filter((c) => c.below_threshold).length,
-    0,
-  );
-  const weAreCheapest = products.filter((p) => p.our_rank === 1).length;
+  const { products, total, summary } = data;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const from = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const to = Math.min(total, page * PAGE_SIZE);
+
+  // Build a URL preserving the active filters, overriding given keys.
+  const href = (over: Record<string, string | number | null>) => {
+    const params = new URLSearchParams();
+    const merged: Record<string, string | number | null> = { brand, category, q, ...over };
+    for (const [k, v] of Object.entries(merged)) {
+      if (v != null && String(v).length) params.set(k, String(v));
+    }
+    const qs = params.toString();
+    return qs ? `/?${qs}` : "/";
+  };
+
+  const filtered = brand || category || q;
 
   return (
     <main className="wrap">
       <BrandBar
         title="Competitor Price Monitor"
-        tag={`Bosch pilot · ${products.length} products · ${competitors.length} competitors`}
+        tag={`${total} products · ${competitors.length} retailers`}
       />
-      <p className="sub">Prices refresh once daily. Click a model for its price history.</p>
+
+      <form className="filters" method="get" action="/">
+        <select name="brand" defaultValue={brand ?? ""} aria-label="Brand">
+          <option value="">All brands</option>
+          {opts.brands.map((b) => (
+            <option key={b.name} value={b.name}>
+              {b.name} ({b.count})
+            </option>
+          ))}
+        </select>
+        <select name="category" defaultValue={category ?? ""} aria-label="Category">
+          <option value="">All categories</option>
+          {opts.categories.map((c) => (
+            <option key={c.name} value={c.name}>
+              {c.name} ({c.count})
+            </option>
+          ))}
+        </select>
+        <input
+          type="search"
+          name="q"
+          defaultValue={q ?? ""}
+          placeholder="Search model or name…"
+          aria-label="Search"
+        />
+        <button type="submit">Filter</button>
+        {filtered ? (
+          <Link className="clear" href="/">
+            Clear
+          </Link>
+        ) : null}
+      </form>
 
       <section className="cards">
-        <Card k="Products" v={String(products.length)} />
-        <Card k="Prices captured" v={`${priced} / ${totalCells}`} />
-        <Card k="We are cheapest" v={`${weAreCheapest}`} accent />
-        <Card k="Below Bosch min (MAP)" v={String(mapViolations)} />
+        <Card k="Products (filtered)" v={String(total)} />
+        <Card k="Prices captured" v={`${summary.priced} / ${summary.totalCells}`} />
+        <Card k="We are cheapest" v={String(summary.weAreCheapest)} accent />
+        <Card k="Below MAP threshold" v={String(summary.mapViolations)} />
       </section>
 
-      <ComparisonTable products={products} competitors={competitors} />
+      {products.length === 0 ? (
+        <p className="muted">No products match these filters.</p>
+      ) : (
+        <>
+          <ComparisonTable products={products} competitors={competitors} showBrand={!brand} />
+
+          <nav className="pager">
+            <span className="muted">
+              Showing {from}–{to} of {total}
+            </span>
+            <span className="pager-controls">
+              {page > 1 ? (
+                <Link href={href({ page: page - 1 })}>← Prev</Link>
+              ) : (
+                <span className="disabled">← Prev</span>
+              )}
+              <span className="muted">
+                Page {page} / {pages}
+              </span>
+              {page < pages ? (
+                <Link href={href({ page: page + 1 })}>Next →</Link>
+              ) : (
+                <span className="disabled">Next →</span>
+              )}
+            </span>
+          </nav>
+        </>
+      )}
 
       <div className="legend">
         <span><span className="dot" style={{ background: "var(--red)" }} />competitor cheaper than us (undercutting)</span>
         <span><span className="dot" style={{ background: "var(--green)" }} />competitor pricier than us (we win)</span>
-        <span><span className="dot" style={{ background: "var(--amber)" }} />below Bosch threshold (MAP)</span>
+        <span><span className="dot" style={{ background: "var(--amber)" }} />below manufacturer MAP threshold</span>
       </div>
     </main>
   );

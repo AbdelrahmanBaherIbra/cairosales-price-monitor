@@ -11,9 +11,11 @@ function fmt(n: number | null | undefined): string {
 export function ComparisonTable({
   products,
   competitors,
+  showBrand = false,
 }: {
   products: ProductComparison[];
   competitors: Competitor[];
+  showBrand?: boolean;
 }) {
   return (
     <div className="table-scroll">
@@ -39,6 +41,7 @@ export function ComparisonTable({
             <tr key={p.product_id}>
               <td className="model">
                 <Link href={`/product/${p.product_id}`}>{p.model_code}</Link>
+                {showBrand && p.brand ? <span className="brand-tag">{p.brand}</span> : null}
               </td>
               <td className="our">{fmt(p.our_price)}</td>
               <td className="muted">{fmt(p.threshold_price)}</td>

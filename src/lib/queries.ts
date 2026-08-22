@@ -25,6 +25,8 @@ export interface ProductComparison {
   product_id: string;
   model_code: string;
   name: string | null;
+  brand: string | null;
+  category: string | null;
   our_price: number | null;
   threshold_price: number | null;
   our_in_stock: boolean;
@@ -41,49 +43,167 @@ export async function getCompetitors(): Promise<Competitor[]> {
   );
 }
 
-/** Build the dashboard matrix: one entry per product with a cell per competitor. */
-export async function getComparisonMatrix(): Promise<ProductComparison[]> {
-  const rows = await query<ComparisonRow>(
-    `select * from v_comparison order by model_code, competitor_name`,
+export interface DashboardFilters {
+  brand?: string | null;
+  category?: string | null;
+  q?: string | null;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface DashboardSummary {
+  priced: number;
+  totalCells: number;
+  weAreCheapest: number;
+  mapViolations: number;
+}
+
+export interface DashboardData {
+  products: ProductComparison[];
+  total: number; // products matching the filter (not just this page)
+  page: number;
+  pageSize: number;
+  summary: DashboardSummary;
+}
+
+// Shared WHERE fragment for the tracked_products filters. $1 brand, $2 category,
+// $3 search term (model code or name).
+const PRODUCT_FILTER = `is_active
+     and ($1::text is null or brand = $1)
+     and ($2::text is null or category = $2)
+     and ($3::text is null or model_code ilike '%'||$3||'%' or name ilike '%'||$3||'%')`;
+
+/** Distinct brands and categories (with counts) for the filter dropdowns. */
+export async function getBrandsAndCategories(): Promise<{
+  brands: { name: string; count: number }[];
+  categories: { name: string; count: number }[];
+}> {
+  const [brands, categories] = await Promise.all([
+    query<{ name: string; count: number }>(
+      `select brand as name, count(*)::int as count from tracked_products
+       where is_active and brand is not null group by brand order by brand`,
+    ),
+    query<{ name: string; count: number }>(
+      `select category as name, count(*)::int as count from tracked_products
+       where is_active and category is not null group by category order by category`,
+    ),
+  ]);
+  return { brands, categories };
+}
+
+/**
+ * One page of the comparison matrix, filtered by brand / category / search, with
+ * KPI totals computed over the whole filtered set (not just the page). Paginates
+ * by product so the dashboard stays fast as the catalog grows to thousands.
+ */
+export async function getDashboard(f: DashboardFilters): Promise<DashboardData> {
+  const page = Math.max(1, f.page ?? 1);
+  const pageSize = f.pageSize ?? 50;
+  const filterParams = [f.brand || null, f.category || null, f.q?.trim() || null];
+
+  const [{ count: total }] = await query<{ count: number }>(
+    `select count(*)::int as count from tracked_products where ${PRODUCT_FILTER}`,
+    filterParams,
   );
 
-  const byProduct = new Map<string, ProductComparison>();
-  for (const r of rows) {
-    let p = byProduct.get(r.product_id);
-    if (!p) {
-      p = {
-        product_id: r.product_id,
-        model_code: r.model_code,
-        name: r.name,
-        our_price: r.our_price,
-        threshold_price: r.threshold_price,
-        our_in_stock: r.our_in_stock,
-        cells: {},
-        cheapest_competitor: null,
-        cheapest_price: null,
-        our_rank: null,
-      };
-      byProduct.set(r.product_id, p);
-    }
-    p.cells[r.competitor_slug] = r;
-  }
+  const idRows = await query<{ product_id: string; brand: string | null; category: string | null }>(
+    `select id as product_id, brand, category from tracked_products
+     where ${PRODUCT_FILTER}
+     order by brand nulls last, model_code
+     limit $4 offset $5`,
+    [...filterParams, pageSize, (page - 1) * pageSize],
+  );
+  const ids = idRows.map((r) => r.product_id);
 
-  for (const p of byProduct.values()) {
-    const prices = Object.values(p.cells)
-      .filter((c) => c.competitor_price != null)
-      .map((c) => ({ slug: c.competitor_slug, price: c.competitor_price as number }));
-    if (prices.length) {
-      const cheapest = prices.reduce((a, b) => (b.price < a.price ? b : a));
-      p.cheapest_competitor = cheapest.slug;
-      p.cheapest_price = cheapest.price;
-      if (p.our_price != null) {
-        const cheaperThanUs = prices.filter((x) => x.price < (p.our_price as number)).length;
-        p.our_rank = cheaperThanUs + 1;
+  let products: ProductComparison[] = [];
+  if (ids.length) {
+    const rows = await query<ComparisonRow>(
+      `select * from v_comparison where product_id = any($1) order by model_code, competitor_name`,
+      [ids],
+    );
+    const byProduct = new Map<string, ProductComparison>();
+    for (const r of rows) {
+      let p = byProduct.get(r.product_id);
+      if (!p) {
+        p = {
+          product_id: r.product_id,
+          model_code: r.model_code,
+          name: r.name,
+          brand: null,
+          category: null,
+          our_price: r.our_price,
+          threshold_price: r.threshold_price,
+          our_in_stock: r.our_in_stock,
+          cells: {},
+          cheapest_competitor: null,
+          cheapest_price: null,
+          our_rank: null,
+        };
+        byProduct.set(r.product_id, p);
+      }
+      p.cells[r.competitor_slug] = r;
+    }
+    for (const p of byProduct.values()) {
+      const prices = Object.values(p.cells)
+        .filter((c) => c.competitor_price != null)
+        .map((c) => ({ slug: c.competitor_slug, price: c.competitor_price as number }));
+      if (prices.length) {
+        const cheapest = prices.reduce((a, b) => (b.price < a.price ? b : a));
+        p.cheapest_competitor = cheapest.slug;
+        p.cheapest_price = cheapest.price;
+        if (p.our_price != null) {
+          const cheaperThanUs = prices.filter((x) => x.price < (p.our_price as number)).length;
+          p.our_rank = cheaperThanUs + 1;
+        }
       }
     }
+    // Preserve the page's sort order and attach brand / category for display.
+    products = idRows
+      .map((r) => {
+        const p = byProduct.get(r.product_id);
+        if (!p) return null;
+        p.brand = r.brand;
+        p.category = r.category;
+        return p;
+      })
+      .filter((p): p is ProductComparison => p !== null);
   }
 
-  return [...byProduct.values()];
+  const [summary] = await query<{
+    priced: number;
+    total_cells: number;
+    map_violations: number;
+    we_are_cheapest: number;
+  }>(
+    `with prod as (select id, our_price from tracked_products where ${PRODUCT_FILTER}),
+          comp as (
+            select v.product_id, v.competitor_price, v.below_threshold
+            from v_comparison v where v.product_id in (select id from prod)
+          )
+     select
+       (select count(*)::int from comp where competitor_price is not null) as priced,
+       (select count(*)::int from comp) as total_cells,
+       (select count(*)::int from comp where below_threshold) as map_violations,
+       (select count(*)::int from prod pr
+          where pr.our_price is not null
+            and exists (select 1 from comp c where c.product_id = pr.id and c.competitor_price is not null)
+            and not exists (select 1 from comp c where c.product_id = pr.id and c.competitor_price < pr.our_price)
+       ) as we_are_cheapest`,
+    filterParams,
+  );
+
+  return {
+    products,
+    total,
+    page,
+    pageSize,
+    summary: {
+      priced: summary?.priced ?? 0,
+      totalCells: summary?.total_cells ?? 0,
+      weAreCheapest: summary?.we_are_cheapest ?? 0,
+      mapViolations: summary?.map_violations ?? 0,
+    },
+  };
 }
 
 export interface HistoryPoint {
