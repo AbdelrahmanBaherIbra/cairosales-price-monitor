@@ -126,8 +126,12 @@ async function render(
   url: string,
   opts?: { fast?: boolean },
 ): Promise<string | null> {
-  const page = await ctx.newPage();
+  // newPage() is inside the try: the stealth plugin occasionally times out
+  // creating a page ("navigating to about:blank"). Left outside, that throw
+  // escapes render() and crashes the whole shard instead of skipping one product.
+  let page: Awaited<ReturnType<BrowserContext["newPage"]>> | undefined;
   try {
+    page = await ctx.newPage();
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
     // Fast path (daily refresh): the price is often already in the server-
     // rendered JSON-LD. Poll briefly and return the instant it's there, instead
@@ -158,7 +162,7 @@ async function render(
   } catch {
     return null;
   } finally {
-    await page.close();
+    if (page) await page.close().catch(() => {});
   }
 }
 
@@ -178,8 +182,9 @@ async function searchAndMatch(
     "{query}",
     encodeURIComponent(code),
   );
-  const page = await ctx.newPage();
+  let page: Awaited<ReturnType<BrowserContext["newPage"]>> | undefined;
   try {
+    page = await ctx.newPage();
     await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
     await page.waitForTimeout(WAIT);
@@ -239,7 +244,7 @@ async function searchAndMatch(
   } catch {
     return null;
   } finally {
-    await page.close();
+    if (page) await page.close().catch(() => {});
   }
 }
 
