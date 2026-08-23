@@ -13,7 +13,7 @@ on:
       slugs:
         description: "Comma-separated competitor slugs (one parallel job each)"
         required: true
-        default: "raya,btech,gaballah,abdulaziz,2b,carrefour,elaraby"
+        default: "raya,btech,gaballah,abdulaziz,2b,carrefour"
 
 jobs:
   prepare:
