@@ -11,7 +11,7 @@
  *   SUPABASE_DB_URL   required   Postgres connection (transaction pooler)
  *   SCRAPE_SLUGS      optional   comma-separated competitor slugs (default: all active)
  *   SCRAPE_EXCLUDE    optional   comma-separated slugs to skip (e.g. noon runs in its own workflow)
- *   SCRAPE_BRAND      optional   match mode only: limit to one brand's products (brand-by-brand rollout)
+ *   SCRAPE_BRAND      optional   limit to one brand's products (match: which to find; refresh: which to re-price)
  *   SCRAPE_LIMIT      optional   max products per competitor (default: all)
  *   SCRAPE_CONCURRENCY optional  parallel pages while matching (default 3)
  *   REFRESH_CONCURRENCY optional parallel pages for clean sites on refresh (default 6)
@@ -459,7 +459,12 @@ function debugDump(slug: string, code: string, url: string, html: string) {
  * mapping instead of a full search+match, which is what makes daily runs at
  * scale affordable.
  */
-async function refreshPrices(browser: Browser, slugsArg?: string[], excludeArg?: string[]) {
+async function refreshPrices(
+  browser: Browser,
+  slugsArg?: string[],
+  excludeArg?: string[],
+  brandArg?: string | null,
+) {
   const rows = await query<{
     cp_id: string;
     product_url: string;
@@ -478,8 +483,13 @@ async function refreshPrices(browser: Browser, slugsArg?: string[], excludeArg?:
        and cp.product_url not like '%/search?%'
        and ($1::text[] is null or c.slug = any($1))
        and ($2::text[] is null or c.slug <> all($2))
+       and ($3::text is null or tp.brand = $3)
      order by c.slug`,
-    [slugsArg && slugsArg.length ? slugsArg : null, excludeArg && excludeArg.length ? excludeArg : null],
+    [
+      slugsArg && slugsArg.length ? slugsArg : null,
+      excludeArg && excludeArg.length ? excludeArg : null,
+      brandArg ?? null,
+    ],
   );
 
   type Row = (typeof rows)[number];
@@ -565,10 +575,11 @@ async function main() {
   const limit = process.env.SCRAPE_LIMIT ? Number(process.env.SCRAPE_LIMIT) : null;
 
   if (mode === "refresh") {
-    console.log("Mode: refresh (price-only on existing matches)");
+    const brandArg = process.env.SCRAPE_BRAND?.trim() || null;
+    console.log(`Mode: refresh (price-only on existing matches)${brandArg ? ` (brand: ${brandArg})` : ""}`);
     const browser = await chromium.launch({ args: ["--no-sandbox"] });
     try {
-      await refreshPrices(browser, slugsArg, excludeArg);
+      await refreshPrices(browser, slugsArg, excludeArg, brandArg);
     } finally {
       await browser.close();
       await closePool();

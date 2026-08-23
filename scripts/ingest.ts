@@ -9,14 +9,23 @@
  */
 import { query, closePool } from "../src/lib/db";
 
+// Canonicalize known duplicate brand spellings in the source catalog so a
+// re-ingest can't re-split a brand across two names. Maps typo -> real brand.
+const BRAND_ALIASES: Record<string, string> = {
+  Mianta: "Mienta", // Egyptian small-appliance brand, mostly mis-spelled in the catalog
+  "Gleem Gas": "Glem Gas", // Italian gas-cooker brand
+};
+
 async function ingestBrand(brand: string): Promise<number> {
   // tracked_products is unqualified (resolves to price_monitor via search_path);
-  // the catalog tables are read from the public schema explicitly.
+  // the catalog tables are read from the public schema explicitly. The brand
+  // column is canonicalized via BRAND_ALIASES so duplicate spellings collapse.
+  const canonical = BRAND_ALIASES[brand] ?? brand;
   const rows = await query<{ n: string }>(
     `with ins as (
        insert into tracked_products
          (source_product_id, model_code, name, brand, category, our_price, in_stock, is_active)
-       select p.id, upper(trim(p.sku)), p.product_name_en, b.name_en, cat.name_en, p.price, true, p.is_active
+       select p.id, upper(trim(p.sku)), p.product_name_en, $2::text, cat.name_en, p.price, true, p.is_active
        from public.products p
        join public.brands b on b.id = p.brand_id
        left join public.categories cat on cat.id = p.category_id
@@ -31,7 +40,7 @@ async function ingestBrand(brand: string): Promise<number> {
        returning 1
      )
      select count(*)::text as n from ins`,
-    [brand],
+    [brand, canonical],
   );
   return Number(rows[0]?.n ?? 0);
 }
