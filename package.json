@@ -9,6 +9,7 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "import:products": "tsx scripts/import-products.ts",
+    "ingest": "tsx scripts/ingest.ts",
     "scrape": "tsx scripts/scrape.ts"
   },
   "dependencies": {

@@ -1,45 +1,69 @@
-name: Match (sharded by competitor)
+name: Match (brand x competitor)
 
-# Seeds product URLs for a brand. Runs one job PER competitor in parallel, so a
-# whole brand across all retailers finishes inside the per-job time limit
-# instead of hitting the 60-min wall a single sequential run would.
+# Seeds product URLs. Fans out one parallel job per (brand, competitor) cell, so
+# several brands match at once. Each cell runs on its own GitHub runner with its
+# own IP, so hitting a throttled site (2B, Carrefour) for multiple brands
+# concurrently is separate IPs each doing 1-at-a-time — NOT amplified load on one
+# IP — which keeps bot-protection happy.
 on:
   workflow_dispatch:
     inputs:
-      brand:
-        description: "Brand to match (blank = all tracked products)"
-        required: false
-        default: ""
+      brands:
+        description: "Comma-separated brand names (public.brands.name_en), e.g. LG,Sharp,Fresh"
+        required: true
       slugs:
-        description: "Comma-separated competitor slugs (one parallel job each)"
+        description: "Comma-separated competitor slugs (crossed with each brand)"
         required: true
         default: "raya,btech,gaballah,abdulaziz,2b,carrefour"
 
 jobs:
+  # Ingest every target brand from public.products into tracked_products up front
+  # (idempotent upsert), so the match cells have products to work with.
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Ingest brands
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          INGEST_BRANDS: ${{ github.event.inputs.brands }}
+        run: npm run ingest
+
   prepare:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
     steps:
       - id: set
-        # Turn "raya,btech,..." into a JSON array the matrix can fan out over.
+        # Cross-product brands x slugs into [{brand, slug}, ...] for matrix.include.
+        # jq trims whitespace and drops empties; brand names may contain spaces/&.
         run: |
-          json=$(echo '${{ github.event.inputs.slugs }}' | tr ',' '\n' | sed '/^\s*$/d' | jq -R . | jq -sc .)
+          json=$(jq -cn --arg b "${{ github.event.inputs.brands }}" --arg s "${{ github.event.inputs.slugs }}" '
+            ($b | split(",") | map(gsub("^\\s+|\\s+$";"")) | map(select(length > 0))) as $B
+            | ($s | split(",") | map(gsub("^\\s+|\\s+$";"")) | map(select(length > 0))) as $S
+            | [ $B[] as $brand | $S[] as $slug | {brand: $brand, slug: $slug} ]')
           echo "matrix=$json" >> "$GITHUB_OUTPUT"
 
   match:
-    needs: prepare
+    needs: [ingest, prepare]
     runs-on: ubuntu-latest
     # Throttled sites (2B, Carrefour) scrape one product at a time with a delay,
-    # so a large catalog (e.g. LG's 289) can run well past an hour. Public repo =
-    # unlimited free minutes, so give shards ample runway to finish instead of
-    # timing out mid-scan and leaving partial coverage.
+    # so a large catalog (e.g. 447 Tornado products) can run well past an hour.
+    # Public repo = unlimited free minutes, so give cells ample runway to finish
+    # instead of timing out mid-scan and leaving partial coverage.
     timeout-minutes: 180
     strategy:
       fail-fast: false
-      max-parallel: 6
+      # GitHub caps concurrent jobs (~20 on free/public); keep headroom so a
+      # single run's cells don't starve other workflows.
+      max-parallel: 18
       matrix:
-        slug: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -49,10 +73,10 @@ jobs:
       - run: npm ci
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
-      - name: Match ${{ matrix.slug }}
+      - name: Match ${{ matrix.brand }} / ${{ matrix.slug }}
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SCRAPE_MODE: match
           SCRAPE_SLUGS: ${{ matrix.slug }}
-          SCRAPE_BRAND: ${{ github.event.inputs.brand }}
+          SCRAPE_BRAND: ${{ matrix.brand }}
         run: npm run scrape
