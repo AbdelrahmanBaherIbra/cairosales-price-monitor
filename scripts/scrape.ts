@@ -64,6 +64,13 @@ const REFRESH_CONC = Number(process.env.REFRESH_CONCURRENCY ?? 6);
 // Fast path: how long to poll for a server-rendered price before falling back to
 // the full JS wait. Sites that ship price in JSON-LD return almost instantly.
 const FAST_CAP = Number(process.env.FAST_CAP_MS ?? 3000);
+// Block detection (refresh mode). If a single competitor's refresh pass comes
+// back overwhelmingly empty, it's almost certainly a bot-block or site outage —
+// not every product delisting at once. Above these thresholds we treat the pass
+// as blocked and DON'T overwrite last-known prices with not_found (the Noon
+// Aug-23 failure mode, where one bad run wiped 169 healthy prices to "gone").
+const BLOCK_MIN_BATCH = Number(process.env.BLOCK_MIN_BATCH ?? 8);
+const BLOCK_RATIO = Number(process.env.BLOCK_RATIO ?? 0.7);
 
 interface Product {
   id: string;
@@ -494,23 +501,63 @@ async function refreshPrices(
 
   type Row = (typeof rows)[number];
 
-  // Re-price one already-matched URL and record it only if the price moved.
-  const priceOne = async (ctx: BrowserContext, r: Row, fast: boolean) => {
+  type Pending = {
+    cpId: string;
+    price: number | null;
+    currency: string;
+    inStock: boolean | null;
+    below: boolean | null;
+    status: string;
+    raw: string | null;
+  };
+
+  // Re-price one already-matched URL. Returns the snapshot it WOULD write but
+  // doesn't persist yet — the commit decision is deferred to commitSlug so a
+  // whole-run block can't overwrite good prices before we've seen the pass total.
+  const priceOne = async (ctx: BrowserContext, r: Row, fast: boolean): Promise<Pending> => {
     const prodHtml = await render(ctx, r.product_url, { fast });
     const offer = prodHtml ? extractOfferFromHtml(prodHtml) : null;
     const price = offer?.price ?? null;
     const below =
       price != null && r.threshold_price != null ? price < Number(r.threshold_price) : null;
-    const changed = await recordSnapshotIfChanged(
-      r.cp_id,
+    return {
+      cpId: r.cp_id,
       price,
-      offer?.currency ?? "EGP",
-      offer?.inStock ?? null,
+      currency: offer?.currency ?? "EGP",
+      inStock: offer?.inStock ?? null,
       below,
-      price != null ? "ok" : "not_found",
-      offer ? JSON.stringify(offer.raw) : null,
-    );
-    return { priced: price != null, changed };
+      status: price != null ? "ok" : "not_found",
+      raw: offer ? JSON.stringify(offer.raw) : null,
+    };
+  };
+
+  // Commit one competitor's refresh results. Live reads are always saved. But if
+  // the pass came back overwhelmingly empty (>= BLOCK_RATIO of a batch of at
+  // least BLOCK_MIN_BATCH), treat it as a block/outage and DROP the not_found
+  // writes — leaving each product's last-known price as the latest, instead of
+  // silently overwriting a healthy dataset with "gone". Returns a log summary.
+  const commitSlug = async (slug: string, pend: Pending[]): Promise<string> => {
+    const attempted = pend.length;
+    const priced = pend.filter((p) => p.price != null).length;
+    const empty = attempted - priced;
+    const blocked = attempted >= BLOCK_MIN_BATCH && empty / attempted >= BLOCK_RATIO;
+    let changed = 0;
+    for (const p of pend) {
+      if (blocked && p.price == null) continue; // don't overwrite a good price with a block
+      const wrote = await recordSnapshotIfChanged(
+        p.cpId,
+        p.price,
+        p.currency,
+        p.inStock,
+        p.below,
+        p.status,
+        p.raw,
+      );
+      if (wrote) changed++;
+    }
+    return blocked
+      ? `  [${slug}] BLOCKED: ${empty}/${attempted} empty in one pass — kept last-known prices (not overwritten); saved ${priced} live reads`
+      : `  [${slug}] refreshed ${attempted}, priced ${priced}, changed ${changed}`;
   };
 
   // Split by politeness: clean sites run wide in one shared context; throttled
@@ -535,10 +582,18 @@ async function refreshPrices(
       (async () => {
         const ctx = await newCtx(browser);
         try {
-          const ok = await mapPool(fastRows, REFRESH_CONC, (r) => priceOne(ctx, r, true));
-          const priced = ok.filter((x) => x?.priced).length;
-          const changed = ok.filter((x) => x?.changed).length;
-          console.log(`  [clean] refreshed ${fastRows.length}, priced ${priced}, changed ${changed}`);
+          const results = await mapPool(fastRows, REFRESH_CONC, (r) => priceOne(ctx, r, true));
+          // Group by competitor so block detection is per-site, not across the
+          // whole clean pool (one site blocking mustn't suppress another's writes).
+          const bySlug = new Map<string, Pending[]>();
+          results.forEach((p, i) => {
+            if (!p) return;
+            const s = fastRows[i].slug;
+            let arr = bySlug.get(s);
+            if (!arr) { arr = []; bySlug.set(s, arr); }
+            arr.push(p);
+          });
+          for (const [slug, pend] of bySlug) console.log(await commitSlug(slug, pend));
         } finally {
           await ctx.close();
         }
@@ -551,13 +606,11 @@ async function refreshPrices(
       (async () => {
         const ctx = await newCtx(browser);
         try {
-          const ok = await mapPool(list, 1, async (r, i) => {
+          const results = await mapPool(list, 1, async (r, i) => {
             if (i > 0) await new Promise((res) => setTimeout(res, 2500));
             return priceOne(ctx, r, false);
           });
-          const priced = ok.filter((x) => x?.priced).length;
-          const changed = ok.filter((x) => x?.changed).length;
-          console.log(`  [${slug}] refreshed ${list.length}, priced ${priced}, changed ${changed}`);
+          console.log(await commitSlug(slug, results.filter(Boolean) as Pending[]));
         } finally {
           await ctx.close();
         }
