@@ -511,49 +511,54 @@ async function refreshPrices(
     raw: string | null;
   };
 
-  // Re-price one already-matched URL. Returns the snapshot it WOULD write but
-  // doesn't persist yet — the commit decision is deferred to commitSlug so a
-  // whole-run block can't overwrite good prices before we've seen the pass total.
-  const priceOne = async (ctx: BrowserContext, r: Row, fast: boolean): Promise<Pending> => {
+  type Outcome = { priced: boolean; changed: boolean; empty: Pending | null };
+
+  // Re-price one already-matched URL. A LIVE read (price found) is persisted
+  // immediately — always safe, and it preserves partial progress if the pass is
+  // later cancelled or times out. An EMPTY read (no price) is NOT written here:
+  // it's returned for a deferred, whole-pass decision in commitSlug, so a
+  // block/outage can't overwrite a good last-known price with "gone".
+  const priceOne = async (ctx: BrowserContext, r: Row, fast: boolean): Promise<Outcome> => {
     const prodHtml = await render(ctx, r.product_url, { fast });
     const offer = prodHtml ? extractOfferFromHtml(prodHtml) : null;
     const price = offer?.price ?? null;
     const below =
       price != null && r.threshold_price != null ? price < Number(r.threshold_price) : null;
+    const currency = offer?.currency ?? "EGP";
+    const raw = offer ? JSON.stringify(offer.raw) : null;
+    if (price != null) {
+      const changed = await recordSnapshotIfChanged(
+        r.cp_id, price, currency, offer?.inStock ?? null, below, "ok", raw,
+      );
+      return { priced: true, changed, empty: null };
+    }
     return {
-      cpId: r.cp_id,
-      price,
-      currency: offer?.currency ?? "EGP",
-      inStock: offer?.inStock ?? null,
-      below,
-      status: price != null ? "ok" : "not_found",
-      raw: offer ? JSON.stringify(offer.raw) : null,
+      priced: false,
+      changed: false,
+      empty: { cpId: r.cp_id, price: null, currency, inStock: offer?.inStock ?? null, below, status: "not_found", raw },
     };
   };
 
-  // Commit one competitor's refresh results. Live reads are always saved. But if
-  // the pass came back overwhelmingly empty (>= BLOCK_RATIO of a batch of at
-  // least BLOCK_MIN_BATCH), treat it as a block/outage and DROP the not_found
-  // writes — leaving each product's last-known price as the latest, instead of
-  // silently overwriting a healthy dataset with "gone". Returns a log summary.
-  const commitSlug = async (slug: string, pend: Pending[]): Promise<string> => {
-    const attempted = pend.length;
-    const priced = pend.filter((p) => p.price != null).length;
-    const empty = attempted - priced;
+  // Decide the empty reads for one competitor once the whole pass is in. If the
+  // pass came back overwhelmingly empty (>= BLOCK_RATIO of a batch of at least
+  // BLOCK_MIN_BATCH), treat it as a block/outage and DROP the not_found writes —
+  // leaving each product's last-known price as the latest, instead of silently
+  // overwriting a healthy dataset with "gone" (the Noon Aug-23 failure mode).
+  // Successful reads were already saved by priceOne. Returns a log summary.
+  const commitSlug = async (slug: string, outcomes: Outcome[]): Promise<string> => {
+    const attempted = outcomes.length;
+    const priced = outcomes.filter((o) => o.priced).length;
+    const empties = outcomes.map((o) => o.empty).filter((e): e is Pending => e != null);
+    const empty = empties.length;
+    let changed = outcomes.filter((o) => o.changed).length;
     const blocked = attempted >= BLOCK_MIN_BATCH && empty / attempted >= BLOCK_RATIO;
-    let changed = 0;
-    for (const p of pend) {
-      if (blocked && p.price == null) continue; // don't overwrite a good price with a block
-      const wrote = await recordSnapshotIfChanged(
-        p.cpId,
-        p.price,
-        p.currency,
-        p.inStock,
-        p.below,
-        p.status,
-        p.raw,
-      );
-      if (wrote) changed++;
+    if (!blocked) {
+      for (const p of empties) {
+        const wrote = await recordSnapshotIfChanged(
+          p.cpId, p.price, p.currency, p.inStock, p.below, p.status, p.raw,
+        );
+        if (wrote) changed++;
+      }
     }
     return blocked
       ? `  [${slug}] BLOCKED: ${empty}/${attempted} empty in one pass — kept last-known prices (not overwritten); saved ${priced} live reads`
@@ -585,15 +590,15 @@ async function refreshPrices(
           const results = await mapPool(fastRows, REFRESH_CONC, (r) => priceOne(ctx, r, true));
           // Group by competitor so block detection is per-site, not across the
           // whole clean pool (one site blocking mustn't suppress another's writes).
-          const bySlug = new Map<string, Pending[]>();
-          results.forEach((p, i) => {
-            if (!p) return;
+          const bySlug = new Map<string, Outcome[]>();
+          results.forEach((o, i) => {
+            if (!o) return;
             const s = fastRows[i].slug;
             let arr = bySlug.get(s);
             if (!arr) { arr = []; bySlug.set(s, arr); }
-            arr.push(p);
+            arr.push(o);
           });
-          for (const [slug, pend] of bySlug) console.log(await commitSlug(slug, pend));
+          for (const [slug, outcomes] of bySlug) console.log(await commitSlug(slug, outcomes));
         } finally {
           await ctx.close();
         }
@@ -610,7 +615,7 @@ async function refreshPrices(
             if (i > 0) await new Promise((res) => setTimeout(res, 2500));
             return priceOne(ctx, r, false);
           });
-          console.log(await commitSlug(slug, results.filter(Boolean) as Pending[]));
+          console.log(await commitSlug(slug, results.filter(Boolean) as Outcome[]));
         } finally {
           await ctx.close();
         }

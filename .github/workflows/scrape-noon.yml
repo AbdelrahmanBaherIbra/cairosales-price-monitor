@@ -17,7 +17,10 @@ on:
 jobs:
   scrape-noon:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Noon is throttled (1 product at a time, 2.5s apart) so a full refresh of
+    # ~170 mappings plus JS renders runs past 60 min on a slow day and gets
+    # cancelled mid-pass (run #13, Aug 24). Give it runway to finish.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
