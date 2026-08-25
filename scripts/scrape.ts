@@ -71,6 +71,12 @@ const FAST_CAP = Number(process.env.FAST_CAP_MS ?? 3000);
 // Aug-23 failure mode, where one bad run wiped 169 healthy prices to "gone").
 const BLOCK_MIN_BATCH = Number(process.env.BLOCK_MIN_BATCH ?? 8);
 const BLOCK_RATIO = Number(process.env.BLOCK_RATIO ?? 0.7);
+// Early block-bail for THROTTLED sites. A fully-blocked throttled site serves a
+// challenge page that render() waits out (~20s each), so grinding all N products
+// blows past the job timeout with zero signal (Noon: 119 min, cancelled). Once
+// we've sampled this many products and they're >= BLOCK_RATIO empty, the site is
+// blocked — stop and skip the rest instead of paying the wait N times.
+const BLOCK_EARLY_MIN = Number(process.env.BLOCK_EARLY_MIN ?? 20);
 
 interface Product {
   id: string;
@@ -611,11 +617,22 @@ async function refreshPrices(
       (async () => {
         const ctx = await newCtx(browser);
         try {
-          const results = await mapPool(list, 1, async (r, i) => {
+          // Sequential (throttled) with early block-bail: stop scraping the rest
+          // once a big-enough sample is overwhelmingly empty, so a blocked site
+          // doesn't burn the whole timeout paying the challenge-wait per page.
+          const results: Outcome[] = [];
+          let empties = 0;
+          for (let i = 0; i < list.length; i++) {
             if (i > 0) await new Promise((res) => setTimeout(res, 2500));
-            return priceOne(ctx, r, false);
-          });
-          console.log(await commitSlug(slug, results.filter(Boolean) as Outcome[]));
+            const o = await priceOne(ctx, list[i], false);
+            results.push(o);
+            if (!o.priced) empties++;
+            if (results.length >= BLOCK_EARLY_MIN && empties / results.length >= BLOCK_RATIO) {
+              console.log(`  [${slug}] early bail after ${results.length} (${empties} empty) — site looks blocked, skipping remaining ${list.length - results.length}`);
+              break;
+            }
+          }
+          console.log(await commitSlug(slug, results));
         } finally {
           await ctx.close();
         }
