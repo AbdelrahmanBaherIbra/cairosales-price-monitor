@@ -1,12 +1,12 @@
 name: Daily price scrape (Noon)
 
-# Noon is bot-protected and scraped politely (one page at a time), so it is the
-# slowest competitor. Isolating it here means it runs on its own GitHub runner
-# in parallel with the main scrape, and a Noon block/timeout never fails the
-# rest of the pilot.
+# Noon geo-blocks GitHub's US datacenter IP (serves a bot-challenge shell), so a
+# scheduled run from here can't succeed — Noon is scraped from an Egyptian egress
+# instead (see docs/egyptian-egress.md). The daily cron is therefore disabled;
+# manual dispatch is kept for the rare case of testing Noon from the runner.
 on:
-  schedule:
-    - cron: "0 5 * * *" # 05:00 UTC = 07:00 Cairo, same as the main scrape
+  # schedule:
+  #   - cron: "0 5 * * *"   # disabled: Noon needs an Egyptian IP (see docs/egyptian-egress.md)
   workflow_dispatch:
     inputs:
       mode:

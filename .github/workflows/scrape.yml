@@ -59,8 +59,11 @@ jobs:
           # Scheduled runs have empty inputs -> SCRAPE_MODE unset -> defaults to 'refresh'.
           SCRAPE_MODE: ${{ github.event.inputs.mode }}
           SCRAPE_SLUGS: ${{ github.event.inputs.slugs }}
-          # Blank exclude (incl. scheduled runs) -> skip noon; it runs in scrape-noon.yml.
-          SCRAPE_EXCLUDE: ${{ github.event.inputs.exclude || 'noon' }}
+          # Blank exclude (incl. scheduled runs) -> skip the geo-blocked sites.
+          # noon runs in scrape-noon.yml; noon + elaraby serve a datacenter IP a
+          # block/404 shell, so they're scraped from an Egyptian egress instead
+          # (see docs/egyptian-egress.md), never from this US runner.
+          SCRAPE_EXCLUDE: ${{ github.event.inputs.exclude || 'noon,elaraby' }}
           SCRAPE_BRAND: ${{ github.event.inputs.brand }}
           SCRAPE_LIMIT: ${{ github.event.inputs.limit }}
           SCRAPE_DEBUG: ${{ github.event.inputs.debug }}
