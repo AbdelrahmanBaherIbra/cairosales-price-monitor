@@ -77,6 +77,10 @@ const BLOCK_RATIO = Number(process.env.BLOCK_RATIO ?? 0.7);
 // we've sampled this many products and they're >= BLOCK_RATIO empty, the site is
 // blocked — stop and skip the rest instead of paying the wait N times.
 const BLOCK_EARLY_MIN = Number(process.env.BLOCK_EARLY_MIN ?? 20);
+// Dry run: scrape and log prices but write nothing to the DB. For testing the
+// scraper from a new IP (e.g. an Egyptian residential IP that isn't blocked)
+// without touching production data. Set SCRAPE_DRYRUN=1.
+const DRYRUN = process.env.SCRAPE_DRYRUN === "1" || process.env.SCRAPE_DRYRUN === "true";
 
 interface Product {
   id: string;
@@ -120,6 +124,10 @@ async function recordSnapshotIfChanged(
   fetchStatus: string,
   raw: string | null,
 ): Promise<boolean> {
+  if (DRYRUN) {
+    if (price != null) console.log(`  [dry] would record ${fetchStatus} price=${price}`);
+    return false;
+  }
   const res = await query<{ id: string }>(
     `insert into price_snapshots
        (competitor_product_id, price, currency, in_stock, below_threshold, fetch_status, raw)
@@ -395,7 +403,20 @@ async function scrapeCompetitor(
       offer = prodHtml ? extractOfferFromHtml(prodHtml) : null;
     }
 
+    // Price: product-page JSON-LD if present, else the dataLayer price.
+    const price = offer?.price ?? dlPrice ?? null;
+    if (process.env.SCRAPE_DEBUG && index === 0) {
+      console.log(`  [${competitor.slug}] product page: price=${price}`);
+    }
     matched++;
+    if (price != null) priced++;
+
+    // Dry run: report the match/price but don't create the mapping or snapshot.
+    if (DRYRUN) {
+      console.log(`  [${competitor.slug}] DRYRUN ${p.model_code} -> ${candidate.url} @ ${price ?? "no price"}`);
+      return;
+    }
+
     const cp = await query<{ id: string }>(
       `insert into competitor_products
          (tracked_product_id, competitor_id, product_url, match_status, match_confidence)
@@ -409,14 +430,8 @@ async function scrapeCompetitor(
       [p.id, competitor.id, candidate.url, candidate.confidence],
     );
 
-    // Price: product-page JSON-LD if present, else the dataLayer price.
-    const price = offer?.price ?? dlPrice ?? null;
-    if (process.env.SCRAPE_DEBUG && index === 0) {
-      console.log(`  [${competitor.slug}] product page: price=${price}`);
-    }
     const belowThreshold =
       price != null && p.threshold_price != null ? price < Number(p.threshold_price) : null;
-    if (price != null) priced++;
 
     await recordSnapshotIfChanged(
       cp[0].id,
@@ -648,6 +663,7 @@ async function main() {
   const slugsArg = process.env.SCRAPE_SLUGS?.split(",").map((s) => s.trim()).filter(Boolean);
   const excludeArg = process.env.SCRAPE_EXCLUDE?.split(",").map((s) => s.trim()).filter(Boolean);
   const limit = process.env.SCRAPE_LIMIT ? Number(process.env.SCRAPE_LIMIT) : null;
+  if (DRYRUN) console.log("DRY RUN: scraping only, no database writes.");
 
   if (mode === "refresh") {
     const brandArg = process.env.SCRAPE_BRAND?.trim() || null;
