@@ -55,6 +55,7 @@ export default async function DashboardPage({
       <BrandBar
         title="Competitor Price Monitor"
         tag={`${total} products · ${competitors.length} retailers`}
+        link={{ href: "/analytics", label: "Analytics →" }}
       />
 
       <form className="filters" method="get" action="/">

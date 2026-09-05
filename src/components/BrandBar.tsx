@@ -5,10 +5,13 @@ export function BrandBar({
   title,
   tag,
   back,
+  link,
 }: {
   title: string;
   tag?: string;
   back?: boolean;
+  /** Optional forward link, e.g. from the dashboard to the analytics page. */
+  link?: { href: string; label: string };
 }) {
   return (
     <header className="brandbar">
@@ -19,6 +22,11 @@ export function BrandBar({
         {tag ? <div className="tag">{tag}</div> : null}
       </div>
       <div className="spacer" />
+      {link ? (
+        <Link href={link.href} className="backlink">
+          {link.label}
+        </Link>
+      ) : null}
       {back ? (
         <Link href="/" className="backlink">
           ← All products
