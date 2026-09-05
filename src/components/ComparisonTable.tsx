@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { Competitor } from "@/lib/types";
+import { STALE_HOURS, type Competitor } from "@/lib/types";
 import type { ProductComparison } from "@/lib/queries";
 import { RetailerLogo } from "@/components/RetailerLogo";
 
@@ -57,7 +57,8 @@ export function ComparisonTable({
               {competitors.map((c) => {
                 const cell = p.cells[c.slug];
                 const price = cell?.competitor_price ?? null;
-                const cls =
+                const stale = price != null && isStale(cell?.last_checked_at);
+                const cls = [
                   price == null || p.our_price == null
                     ? ""
                     : cell?.below_threshold
@@ -66,18 +67,27 @@ export function ComparisonTable({
                         ? "cheaper"
                         : price > p.our_price
                           ? "pricier"
-                          : "";
+                          : "",
+                  stale ? "stale" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ");
                 const title = statusTitle(cell);
                 return (
                   <td key={c.slug} className={cls} title={title}>
                     {price != null ? (
-                      cell?.product_url ? (
-                        <a href={cell.product_url} target="_blank" rel="noreferrer">
-                          {fmt(price)}
-                        </a>
-                      ) : (
-                        fmt(price)
-                      )
+                      <>
+                        {cell?.product_url ? (
+                          <a href={cell.product_url} target="_blank" rel="noreferrer">
+                            {fmt(price)}
+                          </a>
+                        ) : (
+                          fmt(price)
+                        )}
+                        {stale ? (
+                          <span className="age">{ageLabel(cell?.last_checked_at ?? null)}</span>
+                        ) : null}
+                      </>
                     ) : (
                       <span className="muted">{shortStatus(cell)}</span>
                     )}
@@ -101,15 +111,41 @@ function shortStatus(cell?: { match_status: string | null; fetch_status: string 
   return "—";
 }
 
+/**
+ * A price is stale when we haven't successfully re-read it within STALE_HOURS.
+ * Null means never verified since freshness tracking was added, which is also
+ * stale — we can't vouch for a number we have no read on. This is the only thing
+ * separating a price the block guard is holding from one that simply hasn't moved.
+ */
+function isStale(lastCheckedAt: string | null | undefined): boolean {
+  if (!lastCheckedAt) return true;
+  return Date.now() - new Date(lastCheckedAt).getTime() > STALE_HOURS * 3_600_000;
+}
+
+/** Compact age marker on a stale cell: "3d" since the last read, "?" if never read. */
+function ageLabel(lastCheckedAt: string | null): string {
+  if (!lastCheckedAt) return "?";
+  const days = Math.floor((Date.now() - new Date(lastCheckedAt).getTime()) / 86_400_000);
+  return days >= 1 ? `${days}d` : "!";
+}
+
 function statusTitle(cell?: {
   match_status: string | null;
   fetch_status: string | null;
   captured_at: string | null;
+  last_checked_at: string | null;
 }): string {
   if (!cell) return "";
   const parts: string[] = [];
   if (cell.match_status) parts.push(`match: ${cell.match_status}`);
   if (cell.fetch_status) parts.push(`fetch: ${cell.fetch_status}`);
-  if (cell.captured_at) parts.push(`as of ${new Date(cell.captured_at).toLocaleString()}`);
+  // Two different dates, deliberately labelled apart: when the price last moved
+  // vs when we last confirmed it. Equal only when the last read found a change.
+  if (cell.captured_at) parts.push(`price set ${new Date(cell.captured_at).toLocaleDateString()}`);
+  parts.push(
+    cell.last_checked_at
+      ? `last checked ${new Date(cell.last_checked_at).toLocaleString()}`
+      : "never re-checked",
+  );
   return parts.join(" · ");
 }

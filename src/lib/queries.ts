@@ -1,5 +1,5 @@
 import { query } from "./db";
-import type { Competitor } from "./types";
+import { STALE_HOURS, type Competitor } from "./types";
 
 export interface ComparisonRow {
   product_id: string;
@@ -18,6 +18,8 @@ export interface ComparisonRow {
   product_url: string | null;
   fetch_status: string | null;
   captured_at: string | null;
+  /** When the price was last successfully READ (captured_at is when it last MOVED). */
+  last_checked_at: string | null;
   delta_pct: number | null;
 }
 
@@ -56,6 +58,8 @@ export interface DashboardSummary {
   totalCells: number;
   weAreCheapest: number;
   mapViolations: number;
+  /** Priced cells not re-read within STALE_HOURS — the price shown may be held. */
+  stale: number;
 }
 
 export interface DashboardData {
@@ -174,16 +178,23 @@ export async function getDashboard(f: DashboardFilters): Promise<DashboardData> 
     total_cells: number;
     map_violations: number;
     we_are_cheapest: number;
+    stale: number;
   }>(
+    // STALE_HOURS is our own numeric constant, interpolated because make_interval
+    // can't take it from the shared filterParams positional list.
     `with prod as (select id, our_price from tracked_products where ${PRODUCT_FILTER}),
           comp as (
-            select v.product_id, v.competitor_price, v.below_threshold
+            select v.product_id, v.competitor_price, v.below_threshold, v.last_checked_at
             from v_comparison v where v.product_id in (select id from prod)
           )
      select
        (select count(*)::int from comp where competitor_price is not null) as priced,
        (select count(*)::int from comp) as total_cells,
        (select count(*)::int from comp where below_threshold) as map_violations,
+       (select count(*)::int from comp
+          where competitor_price is not null
+            and (last_checked_at is null
+                 or last_checked_at < now() - make_interval(hours => ${STALE_HOURS}))) as stale,
        (select count(*)::int from prod pr
           where pr.our_price is not null
             and exists (select 1 from comp c where c.product_id = pr.id and c.competitor_price is not null)
@@ -202,6 +213,7 @@ export async function getDashboard(f: DashboardFilters): Promise<DashboardData> 
       totalCells: summary?.total_cells ?? 0,
       weAreCheapest: summary?.we_are_cheapest ?? 0,
       mapViolations: summary?.map_violations ?? 0,
+      stale: summary?.stale ?? 0,
     },
   };
 }

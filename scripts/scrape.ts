@@ -17,6 +17,11 @@
  *   REFRESH_CONCURRENCY optional parallel pages for clean sites on refresh (default 6)
  *   RENDER_WAIT_MS    optional   extra wait after load for JS (default 4000)
  *   FAST_CAP_MS       optional   max poll for a server-rendered price on refresh (default 3000)
+ *
+ * Exit code: a refresh that detects a BLOCKED competitor exits 1, so the
+ * scheduled workflow fails and GitHub emails the run owner. A blocked pass keeps
+ * last-known prices (see commitSlug), which is silent by design — without this
+ * the site can stay blocked for weeks with nobody noticing the data go stale.
  */
 import { chromium as chromiumExtra } from "playwright-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
@@ -417,17 +422,21 @@ async function scrapeCompetitor(
       return;
     }
 
+    // A match run that read a price is also a verification — stamp last_checked_at
+    // so freshly matched products don't land on the dashboard already looking stale.
+    // Null when no price was found, and coalesced on conflict so it never regresses.
     const cp = await query<{ id: string }>(
       `insert into competitor_products
-         (tracked_product_id, competitor_id, product_url, match_status, match_confidence)
-       values ($1,$2,$3,'auto_found',$4)
+         (tracked_product_id, competitor_id, product_url, match_status, match_confidence, last_checked_at)
+       values ($1,$2,$3,'auto_found',$4,$5)
        on conflict (tracked_product_id, competitor_id)
        do update set product_url = excluded.product_url,
                      match_confidence = excluded.match_confidence,
+                     last_checked_at = coalesce(excluded.last_checked_at, competitor_products.last_checked_at),
                      match_status = case when competitor_products.match_status='confirmed'
                                     then 'confirmed' else 'auto_found' end
        returning id`,
-      [p.id, competitor.id, candidate.url, candidate.confidence],
+      [p.id, competitor.id, candidate.url, candidate.confidence, price != null ? new Date() : null],
     );
 
     const belowThreshold =
@@ -492,7 +501,7 @@ async function refreshPrices(
   slugsArg?: string[],
   excludeArg?: string[],
   brandArg?: string | null,
-) {
+): Promise<string[]> {
   const rows = await query<{
     cp_id: string;
     product_url: string;
@@ -532,7 +541,7 @@ async function refreshPrices(
     raw: string | null;
   };
 
-  type Outcome = { priced: boolean; changed: boolean; empty: Pending | null };
+  type Outcome = { cpId: string; priced: boolean; changed: boolean; empty: Pending | null };
 
   // Re-price one already-matched URL. A LIVE read (price found) is persisted
   // immediately — always safe, and it preserves partial progress if the pass is
@@ -551,14 +560,19 @@ async function refreshPrices(
       const changed = await recordSnapshotIfChanged(
         r.cp_id, price, currency, offer?.inStock ?? null, below, "ok", raw,
       );
-      return { priced: true, changed, empty: null };
+      return { cpId: r.cp_id, priced: true, changed, empty: null };
     }
     return {
+      cpId: r.cp_id,
       priced: false,
       changed: false,
       empty: { cpId: r.cp_id, price: null, currency, inStock: offer?.inStock ?? null, below, status: "not_found", raw },
     };
   };
+
+  // Competitors whose pass was declared blocked, collected across both groups so
+  // main() can exit non-zero. Pushed from commitSlug, which is where the call is made.
+  const blockedSlugs: string[] = [];
 
   // Decide the empty reads for one competitor once the whole pass is in. If the
   // pass came back overwhelmingly empty (>= BLOCK_RATIO of a batch of at least
@@ -573,6 +587,7 @@ async function refreshPrices(
     const empty = empties.length;
     let changed = outcomes.filter((o) => o.changed).length;
     const blocked = attempted >= BLOCK_MIN_BATCH && empty / attempted >= BLOCK_RATIO;
+    if (blocked) blockedSlugs.push(slug);
     if (!blocked) {
       for (const p of empties) {
         const wrote = await recordSnapshotIfChanged(
@@ -581,6 +596,17 @@ async function refreshPrices(
         if (wrote) changed++;
       }
     }
+    // Stamp freshness on every mapping we actually read a price for, in one
+    // statement per competitor. Snapshots are change-only, so captured_at says
+    // when the price MOVED; this says when it was last VERIFIED — the only way
+    // the dashboard can tell a held price from one that simply hasn't changed.
+    const pricedIds = outcomes.filter((o) => o.priced).map((o) => o.cpId);
+    if (pricedIds.length && !DRYRUN) {
+      await query(`update competitor_products set last_checked_at = now() where id = any($1)`, [
+        pricedIds,
+      ]);
+    }
+
     return blocked
       ? `  [${slug}] BLOCKED: ${empty}/${attempted} empty in one pass — kept last-known prices (not overwritten); saved ${priced} live reads`
       : `  [${slug}] refreshed ${attempted}, priced ${priced}, changed ${changed}`;
@@ -656,6 +682,7 @@ async function refreshPrices(
   }
 
   await Promise.all(jobs);
+  return blockedSlugs;
 }
 
 async function main() {
@@ -669,11 +696,22 @@ async function main() {
     const brandArg = process.env.SCRAPE_BRAND?.trim() || null;
     console.log(`Mode: refresh (price-only on existing matches)${brandArg ? ` (brand: ${brandArg})` : ""}`);
     const browser = await chromium.launch({ args: ["--no-sandbox"] });
+    let blocked: string[] = [];
     try {
-      await refreshPrices(browser, slugsArg, excludeArg, brandArg);
+      blocked = await refreshPrices(browser, slugsArg, excludeArg, brandArg);
     } finally {
       await browser.close();
       await closePool();
+    }
+    // Fail the run so the scheduled workflow goes red and GitHub emails us. The
+    // prices themselves are fine (last-known values were kept), but a site that
+    // stays blocked silently goes stale for weeks — this is the only alarm.
+    if (blocked.length) {
+      console.error(
+        `BLOCKED: ${blocked.join(", ")} — last-known prices kept, no fresh data captured. ` +
+          `Check whether the site is bot-blocking this IP.`,
+      );
+      process.exit(1);
     }
     console.log("Done.");
     return;

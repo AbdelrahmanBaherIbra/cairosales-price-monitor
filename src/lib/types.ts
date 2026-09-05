@@ -1,3 +1,11 @@
+/**
+ * How long a mapping's price stays "fresh" before the dashboard marks it stale.
+ * The refresh runs daily, so 48h means a price is flagged only after a pass has
+ * actually been missed — not merely because it hasn't changed. Shared by the
+ * summary SQL and the table cell so both agree on the threshold.
+ */
+export const STALE_HOURS = 48;
+
 export type FetchMethod = "jsonld" | "selector" | "api";
 export type CompetitorType = "retailer" | "manufacturer";
 export type MatchStatus = "auto_found" | "confirmed" | "not_found" | "rejected";

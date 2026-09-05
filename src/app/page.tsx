@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getDashboard, getBrandsAndCategories, getCompetitors } from "@/lib/queries";
 import { ComparisonTable } from "@/components/ComparisonTable";
 import { BrandBar } from "@/components/BrandBar";
+import { STALE_HOURS } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -93,6 +94,7 @@ export default async function DashboardPage({
         <Card k="Prices captured" v={`${summary.priced} / ${summary.totalCells}`} />
         <Card k="We are cheapest" v={String(summary.weAreCheapest)} accent />
         <Card k="Below MAP threshold" v={String(summary.mapViolations)} />
+        <Card k={`Stale (>${STALE_HOURS}h)`} v={String(summary.stale)} />
       </section>
 
       {products.length === 0 ? (
@@ -128,6 +130,7 @@ export default async function DashboardPage({
         <span><span className="dot" style={{ background: "var(--red)" }} />competitor cheaper than us (undercutting)</span>
         <span><span className="dot" style={{ background: "var(--green)" }} />competitor pricier than us (we win)</span>
         <span><span className="dot" style={{ background: "var(--amber)" }} />below manufacturer MAP threshold</span>
+        <span><span className="dot" style={{ background: "var(--muted)", opacity: .48 }} />dimmed = not re-checked in {STALE_HOURS}h, price may be held</span>
       </div>
     </main>
   );
